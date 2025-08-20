@@ -1,0 +1,21 @@
+I'm working on a script to streamline deployments of new images on SONiC switches.  I don't have central management currently and so want to carry over a bunch of my settings.  Script and new image would be sitting on /media/flashdrive/*.  SONiC uses an A/B deployment model, so we can work on the offline image before rebooting.  The OS provides a sonic-installer command I intend to have the user run immediately prior that will extract the image to the offline partition with a completely stock configuration.
+
+
+Customization bash script would run once, right after, modifying the newly-deployed offline partition.  Script should operate as follows:
+#determine new install path of the offline partition; verify it was deployed recently.  Warn the user if not and remind them how to install an image.
+#check if this script has already been run against that partition; exit if yes
+#copy config_db from existing
+#copy homes from existing
+#copy fancontrol service, script, settings file from here
+#configure ssh settings (e.g. disconnect timer) and trusted keys
+#copy admin password to new partition from current hash
+#copy fstab to mount the flashdrive (just duplicate existing fstab?)
+#inject Brew install script (run in chroot?)
+#check if the user is ready to cut over; if yes, set the next boot option; else just remind the user the command
+#if yes to previous, let the user know changes will take effect on next reboot, ask if user is ready to reboot now
+
+
+Should mostly be straightforward except for the fancontrol service.  The default fan settings are very loud and the minimums are too high.  I have a custom set of fan curves for fancontrol but they've overridden every boot; currently I copy them to /usr/share/sonic/device/x86_64-cel_seastone-r0/fancontrol and then reboot the pmon service to apply once it's ready.  The script will find the file at /media/flashdrive/fancontrol-custom4.bak, but should not depend on the flashdrive being present for the service to work.
+
+
+I can answer any open questions you have before you dive into implementation.
