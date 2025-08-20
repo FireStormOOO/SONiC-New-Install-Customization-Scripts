@@ -16,6 +16,10 @@ sudo bash /media/flashdrive/sonic-offline-customize.sh --dry-run
 sudo bash /media/flashdrive/sonic-offline-customize.sh
 ```
 
+Flags:
+- `--dry-run` (`-n`): print planned actions without modifying the offline image
+- `--no-handholding` (`-q`): skip non-essential confirmations (warnings still logged)
+
 ### Notes
 - The customize script is versioned and logs its version and completion marker into the offline image at `var/log/sonic-offline-customize.log`.
 - Custom fan curve file expected at `/media/flashdrive/fancontrol-custom4.bak`. It is persisted into the offline image at `etc/sonic/custom-fan/fancontrol`, and restored on every boot by `fancontrol-override.service`.

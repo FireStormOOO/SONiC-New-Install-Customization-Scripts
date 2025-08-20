@@ -13,15 +13,18 @@ WARN_THRESHOLD_SECONDS=$((72 * 3600))
 
 FLASH_MOUNT="/media/flashdrive"
 
-SCRIPT_VERSION="2025.08.20-1"
+SCRIPT_VERSION="2025.08.20-2"
 DRY_RUN=0
+NO_HANDHOLDING=0
 
 usage() {
     cat <<USAGE
-Usage: $0 [--dry-run|-n]
+Usage: $0 [--dry-run|-n] [--no-handholding|-q]
 
 Options:
   -n, --dry-run   Print planned actions without modifying the offline image
+  -q, --no-handholding, --no-hand-holding
+                   Skip non-essential confirmations; proceed after warnings
   -h, --help      Show this help
 USAGE
 }
@@ -120,9 +123,26 @@ verify_recent_install() {
     if [[ $age -le $WARN_THRESHOLD_SECONDS ]]; then
         local hrs=$((age / 3600))
         log "WARN: '$dir' modified ${hrs} hours ago. Proceeding anyway."
+        if [[ "$NO_HANDHOLDING" -eq 1 || "$DRY_RUN" -eq 1 ]]; then
+            return 0
+        fi
+        read -r -p "Continue customizing this not-so-recent image? [y/N]: " ans || true
+        case "${ans,,}" in
+            y|yes) ;;
+            *) die "Aborted by user due to image age warning." ;;
+        esac
         return 0
     fi
-    log "WARN: '$dir' modified more than 72 hours ago. If you intended to customize the newly installed image, consider re-running 'sonic-installer install <image>' first."
+    log "WARN: '$dir' modified more than 72 hours ago. This script is intended to customize a NEWLY INSTALLED image."
+    log "      If you meant to customize a new deployment, first run: 'sonic-installer install <image_or_url>' and then re-run this script."
+    if [[ "$NO_HANDHOLDING" -eq 1 || "$DRY_RUN" -eq 1 ]]; then
+        return 0
+    fi
+    echo -n "Type 'proceed' to continue anyway: "
+    read -r confirm || true
+    if [[ "$confirm" != "proceed" ]]; then
+        die "Aborted by user due to very stale image warning."
+    fi
 }
 
 ensure_dir() {
@@ -248,7 +268,12 @@ copy_admin_password_hash() {
     local line
     if ! grep -q '^admin:' /etc/shadow; then
         log "Admin user not found in /etc/shadow."
-        read -r -p "Enter username to migrate password hash from (or leave blank to skip): " user_name || true
+        if [[ "$NO_HANDHOLDING" -eq 1 ]]; then
+            log "NO-HANDHOLDING: Skipping password hash migration prompt."
+            user_name=""
+        else
+            read -r -p "Enter username to migrate password hash from (or leave blank to skip): " user_name || true
+        fi
         if [[ -z "${user_name}" ]]; then
             log "Skipping password hash migration."
             return 0
@@ -517,6 +542,9 @@ main() {
             -n|--dry-run)
                 DRY_RUN=1
                 ;;
+            -q|--no-handholding|--no-hand-holding)
+                NO_HANDHOLDING=1
+                ;;
             -h|--help)
                 usage; exit 0
                 ;;
@@ -527,7 +555,7 @@ main() {
         shift
     done
 
-    log "Starting sonic-offline-customize version $SCRIPT_VERSION (dry-run=$DRY_RUN)"
+    log "Starting sonic-offline-customize version $SCRIPT_VERSION (dry-run=$DRY_RUN, no-handholding=$NO_HANDHOLDING)"
 
     # Optional: warn if running config differs from saved config
     if command -v show >/dev/null 2>&1 && command -v sonic-cfggen >/dev/null 2>&1; then
@@ -603,4 +631,3 @@ main() {
 }
 
 main "$@"
-
