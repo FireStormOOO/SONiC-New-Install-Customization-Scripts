@@ -287,6 +287,7 @@ install_fancontrol_assets() {
     local platform="$2"
     local platform_dir="$offline_root/usr/share/sonic/device/$platform"
     ensure_dir "$platform_dir"
+    ensure_dir "$offline_root/etc/sonic/custom-fan"
 
     # Settings file from flashdrive
     local custom_settings="$FLASH_MOUNT/fancontrol-custom4.bak"
@@ -295,9 +296,10 @@ install_fancontrol_assets() {
             cp -a "$platform_dir/fancontrol" "$platform_dir/fancontrol.bak.$(date +%s)"
         fi
         cp -a "$custom_settings" "$platform_dir/fancontrol"
-        log "Installed custom fancontrol settings to $platform_dir/fancontrol"
+        cp -a "$custom_settings" "$offline_root/etc/sonic/custom-fan/fancontrol"
+        log "Installed custom fancontrol settings and saved persistent copy"
     else
-        log "WARN: $custom_settings not found; leaving default fancontrol settings"
+        log "WARN: $custom_settings not found; leaving default fancontrol settings. The override service will do nothing unless /etc/sonic/custom-fan/fancontrol exists."
     fi
 
     # Optional script and service from flashdrive
@@ -312,25 +314,24 @@ install_fancontrol_assets() {
         cp -a "$FLASH_MOUNT/fancontrol.service" "$offline_root/etc/systemd/system/fancontrol.service"
         enable_service_in_offline "$offline_root" "fancontrol.service"
         log "Installed and enabled fancontrol.service from flashdrive"
-    else
-        # Ensure pmon is bounced once on first boot so new settings take effect
-        cat >"$offline_root/etc/systemd/system/fancontrol-apply.service" <<'EOF'
+    fi
+
+    # Always install an override service that restores our custom file and restarts pmon on every boot
+    cat >"$offline_root/etc/systemd/system/fancontrol-override.service" <<EOF
 [Unit]
-Description=Apply custom fancontrol settings by restarting pmon once
-After=multi-user.target pmon.service
-Requires=pmon.service
-ConditionPathExists=!/etc/sonic/.fancontrol_applied
+Description=Restore custom fancontrol and restart pmon
+After=pmon.service network-online.target
+Wants=pmon.service network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'systemctl restart pmon.service && touch /etc/sonic/.fancontrol_applied'
+ExecStart=/bin/sh -c 'set -e; SRC=/etc/sonic/custom-fan/fancontrol; DST=/usr/share/sonic/device/$platform/fancontrol; if [ -f "$SRC" ]; then cp -f "$SRC" "$DST"; systemctl restart pmon.service; else echo "fancontrol override: $SRC not present; skipping"; fi'
 
 [Install]
 WantedBy=multi-user.target
 EOF
-        enable_service_in_offline "$offline_root" "fancontrol-apply.service"
-        log "Installed fancontrol-apply.service to restart pmon once on next boot"
-    fi
+    enable_service_in_offline "$offline_root" "fancontrol-override.service"
+    log "Installed fancontrol-override.service to enforce custom fan curve each boot"
 }
 
 write_marker_and_copy_self() {
@@ -389,6 +390,26 @@ maybe_reboot_prompt() {
 main() {
     need_root
     check_binaries || true
+
+    # Optional: warn if running config differs from saved config
+    if command -v show >/dev/null 2>&1 && command -v sonic-cfggen >/dev/null 2>&1; then
+        # Dump current running config in JSON form and compare against saved config_db.json ignoring whitespace
+        # Note: list order differences may appear; this is an advisory warning only.
+        if running=$(show runningconfiguration all 2>/dev/null | sed -n '/^{/,$p'); then
+            tmp_run=$(mktemp)
+            tmp_save=$(mktemp)
+            echo "$running" >"$tmp_run"
+            if [[ -f /etc/sonic/config_db.json ]]; then
+                # Normalize both sides minimally (strip spaces)
+                sed 's/[[:space:]]//g' /etc/sonic/config_db.json >"$tmp_save"
+                sed -i 's/[[:space:]]//g' "$tmp_run"
+                if ! diff -q "$tmp_run" "$tmp_save" >/dev/null 2>&1; then
+                    log "WARN: Running config differs from saved config_db.json. Differences may be cosmetic (list order)."
+                fi
+            fi
+            rm -f "$tmp_run" "$tmp_save" || true
+        fi
+    fi
 
     local target_dir
     target_dir=$(detect_newest_offline_image_dir) || die "Could not find any /host/image-* directories"
