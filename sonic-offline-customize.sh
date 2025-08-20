@@ -2,10 +2,9 @@
 
 set -euo pipefail
 
-# SONiC offline image customization script
+# SONiC offline image customization script (overlay-based)
 # Targeted for SONiC 202411 on Seastone DX010 (x86_64-cel_seastone-r0)
-# Intended to run from the currently-booted image right after extracting a new image.
-# Place this script on /media/flashdrive and run it from there as root.
+# Prepares an overlay mounted at /newroot and applies changes there.
 
 # Configurable thresholds
 RECENT_THRESHOLD_SECONDS=$((4 * 3600))
@@ -13,23 +12,33 @@ WARN_THRESHOLD_SECONDS=$((72 * 3600))
 
 FLASH_MOUNT="/media/flashdrive"
 
-SCRIPT_VERSION="2025.08.20-3"
+SCRIPT_VERSION="2025.08.20-4"
 DRY_RUN=0
 NO_HANDHOLDING=0
 DISABLE_BREW=0
 DISABLE_FANCONTROL=0
+IMAGE_DIR=""
+RW_NAME=""
+LOWER_MODE="auto"
+ACTIVATE=0
+RETAIN=2
 
 usage() {
     cat <<USAGE
-Usage: $0 [--dry-run|-n] [--no-handholding|-q] [--no-brew] [--no-fancontrol]
+Usage: $0 [options]
 
 Options:
-  -n, --dry-run   Print planned actions without modifying the offline image
+  -n, --dry-run                    Print planned actions without modifying the filesystem
   -q, --no-handholding, --no-hand-holding
-                   Skip non-essential confirmations; proceed after warnings
-  --no-brew       Skip installing the Homebrew first-boot service
-  --no-fancontrol Skip installing fancontrol settings and services
-  -h, --help      Show this help
+                                   Skip non-essential confirmations; proceed after warnings
+  --no-brew                        Skip installing the Homebrew first-boot service
+  --no-fancontrol                  Skip installing fancontrol settings and services
+  --image-dir DIR                  Target image directory (default: newest /host/image-*)
+  --rw-name NAME                   Name for new overlay upper/work (default: timestamp)
+  --lower MODE                     Lower selection: auto|fs|dir (default: auto)
+  --activate                       After customizing, live-activate overlay (rename rw/work)
+  --retain N                       Retain N old overlays when activating (default: 2)
+  -h, --help                       Show this help
 USAGE
 }
 
@@ -42,6 +51,8 @@ required_binaries=(
     rsync
     blkid
     findmnt
+    mount
+    mountpoint
 )
 
 log() {
@@ -172,6 +183,39 @@ ensure_dir() {
 
 # ... existing code ...
 
+prepare_overlay_or_die() {
+    local image_dir="$1" rw_name="$2" lower_mode="$3"
+    local script_dir="$(cd "$(dirname "$0")" && pwd)"
+    local overlay_tool="$script_dir/sonic-overlay.sh"
+    [[ -x "$overlay_tool" ]] || die "Overlay tool not found or not executable: $overlay_tool"
+    local cmd=("$overlay_tool" prepare --image-dir "$image_dir" --lower "$lower_mode" --rw-name "$rw_name" --mount)
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        log "DRY-RUN: ${cmd[*]}"
+    else
+        "${cmd[@]}"
+    fi
+    if ! mountpoint -q /newroot; then
+        die "/newroot is not mounted; overlay prepare failed"
+    fi
+}
+
+activate_overlay_if_requested() {
+    local image_dir="$1" rw_name="$2" retain="$3"
+    local script_dir="$(cd "$(dirname "$0")" && pwd)"
+    local overlay_tool="$script_dir/sonic-overlay.sh"
+    [[ -x "$overlay_tool" ]] || die "Overlay tool not found or not executable: $overlay_tool"
+    if [[ "$ACTIVATE" -eq 1 ]]; then
+        local cmd=("$overlay_tool" activate --image-dir "$image_dir" --rw-name "$rw_name" --retain "$retain")
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            log "DRY-RUN: ${cmd[*]}"
+        else
+            "${cmd[@]}"
+        fi
+    else
+        log "To activate overlay for next boot: $overlay_tool activate --image-dir '$image_dir' --rw-name '$rw_name' --retain $retain"
+    fi
+}
+
 main() {
     need_root
     check_binaries || true
@@ -190,6 +234,25 @@ main() {
                 ;;
             --no-fancontrol)
                 DISABLE_FANCONTROL=1
+                ;;
+            --image-dir)
+                IMAGE_DIR=${2:-}
+                shift
+                ;;
+            --rw-name)
+                RW_NAME=${2:-}
+                shift
+                ;;
+            --lower)
+                LOWER_MODE=${2:-auto}
+                shift
+                ;;
+            --activate)
+                ACTIVATE=1
+                ;;
+            --retain)
+                RETAIN=${2:-2}
+                shift
                 ;;
             -h|--help)
                 usage; exit 0
@@ -224,18 +287,18 @@ main() {
     fi
 
     local target_dir
-    target_dir=$(detect_newest_offline_image_dir) || die "Could not find any /host/image-* directories"
+    if [[ -z "$IMAGE_DIR" ]]; then
+        target_dir=$(detect_newest_offline_image_dir) || die "Could not find any /host/image-* directories"
+    else
+        target_dir="$IMAGE_DIR"
+    fi
+    [[ -d "$target_dir" ]] || die "Image directory not found: $target_dir"
     verify_recent_install "$target_dir"
 
-    # Resolve offline root (prefer 'rw' overlay, then fsroot, then dir)
-    local offline_root
-    if [[ -d "$target_dir/rw" ]]; then
-        offline_root="$target_dir/rw"
-    elif [[ -d "$target_dir/fsroot" ]]; then
-        offline_root="$target_dir/fsroot"
-    else
-        offline_root="$target_dir"
-    fi
+    # Prepare overlay at /newroot (uniform customization path)
+    if [[ -z "$RW_NAME" ]]; then RW_NAME=$(date +%Y%m%d-%H%M%S); fi
+    prepare_overlay_or_die "$target_dir" "$RW_NAME" "$LOWER_MODE"
+    local offline_root="/newroot"
 
     local already
     already=$(already_customized_exit_if_true "$offline_root")
@@ -269,6 +332,9 @@ main() {
     local image_name
     image_name=$(image_dir_to_name "$target_dir")
     log "Target image name: $image_name"
+
+    # Optionally live-activate overlay now
+    activate_overlay_if_requested "$target_dir" "$RW_NAME" "$RETAIN"
 
     set_next_boot_prompt "$image_name"
     maybe_reboot_prompt
