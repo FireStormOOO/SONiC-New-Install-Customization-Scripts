@@ -17,7 +17,6 @@
 - Versioned runs: `SCRIPT_VERSION` logged at the start of execution and recorded on completion.
 - Dry-run support: `--dry-run` prints planned actions, writes nothing, but still prompts.
 - No-handholding mode: `--no-handholding` skips non-essential confirmations. Stale image checks (>4h and >72h) become non-blocking when enabled.
-- No-handholding mode: `--no-handholding` skips non-essential confirmations. Stale image checks (>4h and >72h) become non-blocking when enabled.
 - Platform detection: `sonic-cfggen -H -v DEVICE_METADATA.localhost.platform` with fallback to known platform string.
 - SSH migration: copy `sshd_config`, optional `sshd_config.d`, host keys, and user `.ssh` directories.
 - Password migration: copy the hash line for `admin` (or operator-provided user) from current `/etc/shadow` into the offline image's `/etc/shadow` with backup.

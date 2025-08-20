@@ -1,7 +1,7 @@
 ## SONiC New Install Customization Scripts
 
 ### Overview
-Tools to customize the offline SONiC image (A/B model) before reboot to minimize downtime. Targeted for SONiC 202411 on Seastone DX010 (`x86_64-cel_seastone-r0`).
+Tools to customize the offline SONiC image (A/B model) before reboot to minimize downtime. Targeted for SONiC 202411 on Seastone DX010 (`x86_64-cel_seastone-r0`). Offline image roots are auto-detected; if present, the writable overlay `rw/` is used; otherwise `fsroot/` or the image dir.
 
 ### Scripts
 - `sonic-offline-validate.sh` (non-destructive): validates environment assumptions (binaries, platform, newest image and fsroot, recentness, flashdrive UUID/assets, offline layout, space for `/home`, admin/shadow, running vs saved config advisory, `pmon` present).
@@ -19,6 +19,8 @@ sudo bash /media/flashdrive/sonic-offline-customize.sh
 Flags:
 - `--dry-run` (`-n`): print planned actions without modifying the offline image
 - `--no-handholding` (`-q`): skip non-essential confirmations (warnings still logged)
+- `--no-brew`: skip installing the Homebrew first-boot service
+- `--no-fancontrol`: skip installing fancontrol settings and services
 
 ### Notes
 - The customize script is versioned and logs its version and completion marker into the offline image at `var/log/sonic-offline-customize.log`.

@@ -13,18 +13,22 @@ WARN_THRESHOLD_SECONDS=$((72 * 3600))
 
 FLASH_MOUNT="/media/flashdrive"
 
-SCRIPT_VERSION="2025.08.20-2"
+SCRIPT_VERSION="2025.08.20-3"
 DRY_RUN=0
 NO_HANDHOLDING=0
+DISABLE_BREW=0
+DISABLE_FANCONTROL=0
 
 usage() {
     cat <<USAGE
-Usage: $0 [--dry-run|-n] [--no-handholding|-q]
+Usage: $0 [--dry-run|-n] [--no-handholding|-q] [--no-brew] [--no-fancontrol]
 
 Options:
   -n, --dry-run   Print planned actions without modifying the offline image
   -q, --no-handholding, --no-hand-holding
                    Skip non-essential confirmations; proceed after warnings
+  --no-brew       Skip installing the Homebrew first-boot service
+  --no-fancontrol Skip installing fancontrol settings and services
   -h, --help      Show this help
 USAGE
 }
@@ -90,7 +94,13 @@ detect_newest_offline_image_dir() {
     for path in /host/image-*; do
         [[ -d "$path" ]] || continue
         local t
-        t=$(stat -c %Y "$path" 2>/dev/null || echo 0)
+        if [[ -d "$path/rw" ]]; then
+            t=$(stat -c %Y "$path/rw" 2>/dev/null || echo 0)
+        elif [[ -d "$path/fsroot" ]]; then
+            t=$(stat -c %Y "$path/fsroot" 2>/dev/null || echo 0)
+        else
+            t=$(stat -c %Y "$path" 2>/dev/null || echo 0)
+        fi
         if [[ "$t" -gt "$mtime" ]]; then
             mtime=$t
             newest=$path
@@ -108,8 +118,10 @@ image_dir_to_name() {
 verify_recent_install() {
     local dir="$1"
     local now ts age
-    # Prefer fsroot timestamp if present
-    if [[ -d "$dir/fsroot" ]]; then
+    # Prefer rw overlay timestamp, then fsroot, then directory
+    if [[ -d "$dir/rw" ]]; then
+        ts=$(stat -c %Y "$dir/rw")
+    elif [[ -d "$dir/fsroot" ]]; then
         ts=$(stat -c %Y "$dir/fsroot")
     else
         ts=$(stat -c %Y "$dir")
@@ -158,381 +170,7 @@ ensure_dir() {
     fi
 }
 
-enable_service_in_offline() {
-    local offline_root="$1"
-    local unit_name="$2"
-    ensure_dir "$offline_root/etc/systemd/system/multi-user.target.wants"
-    if [[ -f "$offline_root/etc/systemd/system/$unit_name" ]]; then
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: ln -sf ../$unit_name $offline_root/etc/systemd/system/multi-user.target.wants/$unit_name"
-        else
-            ln -sf "../$unit_name" "$offline_root/etc/systemd/system/multi-user.target.wants/$unit_name"
-        fi
-    fi
-}
-
-copy_config_db() {
-    local offline_root="$1"
-    local src="/etc/sonic/config_db.json"
-    local dst="$offline_root/etc/sonic/config_db.json"
-    if [[ -f "$src" ]]; then
-        ensure_dir "$offline_root/etc/sonic"
-        if [[ -f "$dst" ]]; then
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                log "DRY-RUN: cp -a $dst $dst.bak.$(date +%s)"
-            else
-                cp -a "$dst" "$dst.bak.$(date +%s)"
-            fi
-        fi
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a $src $dst"
-        else
-            cp -a "$src" "$dst"
-        fi
-        log "Copied config_db.json"
-    else
-        log "WARN: $src not found; skipping config_db copy"
-    fi
-}
-
-copy_homes() {
-    local offline_root="$1"
-    ensure_dir "$offline_root/home"
-    if command -v rsync >/dev/null 2>&1; then
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: rsync -aHAX --numeric-ids --delete-excluded --exclude '*/.cache/*' --exclude '*/.local/share/Trash/*' /home/ $offline_root/home/"
-        else
-            rsync -aHAX --numeric-ids --delete-excluded \
-                --exclude '*/.cache/*' --exclude '*/.local/share/Trash/*' \
-                /home/ "$offline_root/home/"
-        fi
-    else
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a /home/. $offline_root/home/"
-        else
-            cp -a /home/. "$offline_root/home/"
-        fi
-    fi
-    log "Copied /home"
-}
-
-copy_ssh_settings_and_keys() {
-    local offline_root="$1"
-    ensure_dir "$offline_root/etc/ssh"
-    if [[ -f /etc/ssh/sshd_config ]]; then
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a /etc/ssh/sshd_config $offline_root/etc/ssh/sshd_config"
-        else
-            cp -a /etc/ssh/sshd_config "$offline_root/etc/ssh/sshd_config"
-        fi
-    fi
-    if [[ -d /etc/ssh/sshd_config.d ]]; then
-        ensure_dir "$offline_root/etc/ssh/sshd_config.d"
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a /etc/ssh/sshd_config.d/. $offline_root/etc/ssh/sshd_config.d/"
-        else
-            cp -a /etc/ssh/sshd_config.d/. "$offline_root/etc/ssh/sshd_config.d/" || true
-        fi
-    fi
-    # Preserve host keys to avoid client warnings
-    for key in /etc/ssh/ssh_host_*; do
-        [[ -f "$key" ]] || continue
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a $key $offline_root/etc/ssh/"
-        else
-            cp -a "$key" "$offline_root/etc/ssh/"
-        fi
-    done
-
-    # Copy user authorized_keys
-    if [[ -d /home ]]; then
-        for homedir in /home/*; do
-            [[ -d "$homedir" ]] || continue
-            local rel
-            rel=${homedir#/home/}
-            ensure_dir "$offline_root/home/$rel"
-            if [[ -d "$homedir/.ssh" ]]; then
-                ensure_dir "$offline_root/home/$rel/.ssh"
-                if [[ "$DRY_RUN" -eq 1 ]]; then
-                    log "DRY-RUN: cp -a $homedir/.ssh/. $offline_root/home/$rel/.ssh/"
-                else
-                    cp -a "$homedir/.ssh/." "$offline_root/home/$rel/.ssh/" || true
-                fi
-            fi
-        done
-    fi
-    log "Copied SSH config, host keys, and user keys"
-}
-
-copy_admin_password_hash() {
-    local offline_root="$1"
-    local user_name="admin"
-    local line
-    if ! grep -q '^admin:' /etc/shadow; then
-        log "Admin user not found in /etc/shadow."
-        if [[ "$NO_HANDHOLDING" -eq 1 ]]; then
-            log "NO-HANDHOLDING: Skipping password hash migration prompt."
-            user_name=""
-        else
-            read -r -p "Enter username to migrate password hash from (or leave blank to skip): " user_name || true
-        fi
-        if [[ -z "${user_name}" ]]; then
-            log "Skipping password hash migration."
-            return 0
-        fi
-    fi
-    if ! line=$(grep -E "^${user_name}:" /etc/shadow || true); then
-        log "WARN: user '${user_name}' not found in /etc/shadow; skipping password hash migration"
-        return 0
-    fi
-    local shadow_dst="$offline_root/etc/shadow"
-    if [[ ! -f "$shadow_dst" ]]; then
-        log "WARN: $shadow_dst not found in offline image; skipping password hash migration"
-        return 0
-    fi
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "DRY-RUN: cp -a $shadow_dst $shadow_dst.bak.$(date +%s)"
-    else
-        cp -a "$shadow_dst" "$shadow_dst.bak.$(date +%s)"
-    fi
-    # Replace or append the line for the user
-    if grep -qE "^${user_name}:" "$shadow_dst"; then
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: update password hash for $user_name in $shadow_dst"
-        else
-            sed -i "s%^${user_name}:[^:]*:%${line%%:*}:${line#*:}%" "$shadow_dst" || {
-                sed -i "\%^${user_name}:% d" "$shadow_dst"
-                echo "$line" >>"$shadow_dst"
-            }
-        fi
-    else
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: append password hash for $user_name to $shadow_dst"
-        else
-            echo "$line" >>"$shadow_dst"
-        fi
-    fi
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "DRY-RUN: chmod 640 $shadow_dst; chown root:shadow $shadow_dst"
-    else
-        chmod 640 "$shadow_dst" || true
-        chown root:shadow "$shadow_dst" || true
-    fi
-    log "Migrated password hash for user '${user_name}'"
-}
-
-update_fstab_for_flashdrive() {
-    local offline_root="$1"
-    local fstab_dst="$offline_root/etc/fstab"
-    ensure_dir "$offline_root/etc"
-    if [[ -f /etc/fstab ]]; then
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a /etc/fstab $fstab_dst"
-        else
-            cp -a /etc/fstab "$fstab_dst"
-        fi
-    else
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: touch $fstab_dst"
-        else
-            touch "$fstab_dst"
-        fi
-    fi
-
-    ensure_dir "$offline_root$FLASH_MOUNT"
-
-    local src_dev
-    if src_dev=$(findmnt -no SOURCE "$FLASH_MOUNT" 2>/dev/null); then
-        local uuid
-        uuid=$(blkid -s UUID -o value "$src_dev" 2>/dev/null || true)
-        if [[ -n "$uuid" ]]; then
-            local entry="UUID=$uuid $FLASH_MOUNT auto defaults,nofail,x-systemd.automount 0 0"
-            if ! grep -q "UUID=$uuid" "$fstab_dst" 2>/dev/null; then
-                if [[ "$DRY_RUN" -eq 1 ]]; then
-                    log "DRY-RUN: append '$entry' to $fstab_dst"
-                else
-                    echo "$entry" >>"$fstab_dst"
-                fi
-                log "Added flashdrive UUID entry to fstab"
-            else
-                log "fstab already contains entry for flashdrive UUID $uuid"
-            fi
-        else
-            log "WARN: Could not determine UUID for $src_dev; not modifying fstab"
-        fi
-    else
-        log "WARN: $FLASH_MOUNT not currently mounted; copied fstab as-is"
-    fi
-}
-
-install_brew_first_boot_service() {
-    local offline_root="$1"
-    ensure_dir "$offline_root/etc/systemd/system"
-    ensure_dir "$offline_root/var/lib/sonic"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "DRY-RUN: write $offline_root/etc/systemd/system/brew-bootstrap.service"
-    else
-        cat >"$offline_root/etc/systemd/system/brew-bootstrap.service" <<'EOF'
-[Unit]
-Description=Bootstrap Homebrew on first boot
-After=network-online.target
-Wants=network-online.target
-ConditionPathExists=!/var/lib/sonic/brew_bootstrap_done
-
-[Service]
-Type=oneshot
-Environment=NONINTERACTIVE=1
-Environment=CI=1
-ExecStart=/bin/bash -lc 'set -e; if command -v curl >/dev/null 2>&1; then sh -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true; else echo "curl not found; skipping brew install"; fi; touch /var/lib/sonic/brew_bootstrap_done'
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    fi
-    enable_service_in_offline "$offline_root" "brew-bootstrap.service"
-    log "Installed brew-bootstrap.service (first-boot)"
-}
-
-install_fancontrol_assets() {
-    local offline_root="$1"
-    local platform="$2"
-    local platform_dir="$offline_root/usr/share/sonic/device/$platform"
-    ensure_dir "$platform_dir"
-    ensure_dir "$offline_root/etc/sonic/custom-fan"
-
-    # Settings file from flashdrive
-    local custom_settings="$FLASH_MOUNT/fancontrol-custom4.bak"
-    if [[ -f "$custom_settings" ]]; then
-        if [[ -f "$platform_dir/fancontrol" ]]; then
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                log "DRY-RUN: cp -a $platform_dir/fancontrol $platform_dir/fancontrol.bak.$(date +%s)"
-            else
-                cp -a "$platform_dir/fancontrol" "$platform_dir/fancontrol.bak.$(date +%s)"
-            fi
-        fi
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a $custom_settings $platform_dir/fancontrol"
-            log "DRY-RUN: cp -a $custom_settings $offline_root/etc/sonic/custom-fan/fancontrol"
-        else
-            cp -a "$custom_settings" "$platform_dir/fancontrol"
-            cp -a "$custom_settings" "$offline_root/etc/sonic/custom-fan/fancontrol"
-        fi
-        log "Installed custom fancontrol settings and saved persistent copy"
-    else
-        log "WARN: $custom_settings not found; leaving default fancontrol settings. The override service will do nothing unless /etc/sonic/custom-fan/fancontrol exists."
-    fi
-
-    # Optional script and service from flashdrive
-    if [[ -f "$FLASH_MOUNT/fancontrol" ]]; then
-        ensure_dir "$offline_root/usr/sbin"
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a $FLASH_MOUNT/fancontrol $offline_root/usr/sbin/fancontrol; chmod +x"
-        else
-            cp -a "$FLASH_MOUNT/fancontrol" "$offline_root/usr/sbin/fancontrol"
-            chmod +x "$offline_root/usr/sbin/fancontrol" || true
-        fi
-        log "Copied fancontrol script"
-    fi
-    if [[ -f "$FLASH_MOUNT/fancontrol.service" ]]; then
-        ensure_dir "$offline_root/etc/systemd/system"
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a $FLASH_MOUNT/fancontrol.service $offline_root/etc/systemd/system/fancontrol.service"
-        else
-            cp -a "$FLASH_MOUNT/fancontrol.service" "$offline_root/etc/systemd/system/fancontrol.service"
-        fi
-        enable_service_in_offline "$offline_root" "fancontrol.service"
-        log "Installed and enabled fancontrol.service from flashdrive"
-    fi
-
-    # Always install an override service that restores our custom file and restarts pmon on every boot
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "DRY-RUN: write $offline_root/etc/systemd/system/fancontrol-override.service"
-    else
-        cat >"$offline_root/etc/systemd/system/fancontrol-override.service" <<EOF
-[Unit]
-Description=Restore custom fancontrol and restart pmon
-After=pmon.service network-online.target
-Wants=pmon.service network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/bin/sh -c 'set -e; SRC=/etc/sonic/custom-fan/fancontrol; DST=/usr/share/sonic/device/$platform/fancontrol; if [ -f "$SRC" ]; then cp -f "$SRC" "$DST"; systemctl restart pmon.service; else echo "fancontrol override: $SRC not present; skipping"; fi'
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    fi
-    enable_service_in_offline "$offline_root" "fancontrol-override.service"
-    log "Installed fancontrol-override.service to enforce custom fan curve each boot"
-}
-
-write_marker_and_copy_self() {
-    local offline_root="$1"
-    ensure_dir "$offline_root/var/log"
-    LOGFILE="$offline_root/var/log/sonic-offline-customize.log"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "DRY-RUN: would create log file at $LOGFILE"
-    else
-        touch "$LOGFILE"
-        chmod 640 "$LOGFILE" || true
-        echo "VERSION $SCRIPT_VERSION $(date -Is)" >>"$LOGFILE" || true
-        log "Logging to $LOGFILE (version $SCRIPT_VERSION)"
-    fi
-
-    # Copy this script into the offline image for traceability
-    ensure_dir "$offline_root/usr/local/sbin"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "DRY-RUN: cp -a $0 $offline_root/usr/local/sbin/sonic-offline-customize.sh"
-    else
-        cp -a "$0" "$offline_root/usr/local/sbin/sonic-offline-customize.sh" || true
-    fi
-}
-
-already_customized_exit_if_true() {
-    local offline_root="$1"
-    local marker="$offline_root/var/log/sonic-offline-customize.log"
-    if [[ -f "$marker" ]] && grep -q "CUSTOMIZATION_COMPLETED" "$marker" 2>/dev/null; then
-        echo "ALREADY"; return 0
-    fi
-    echo "NO"; return 0
-}
-
-set_next_boot_prompt() {
-    local image_name="$1"
-    read -r -p "Set next boot to '$image_name'? [y/N]: " ans || true
-    case "${ans,,}" in
-        y|yes)
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                log "DRY-RUN: sonic-installer set-next-boot $image_name"
-            elif sonic-installer set-next-boot "$image_name"; then
-                log "Set next boot to $image_name"
-            else
-                log "WARN: Failed to set next boot via sonic-installer. You can run: sonic-installer set-next-boot '$image_name'"
-            fi
-            ;;
-        *)
-            log "Reminder: To switch on next reboot: sonic-installer set-next-boot '$image_name'"
-            ;;
-    esac
-}
-
-maybe_reboot_prompt() {
-    read -r -p "Reboot now to cut over? [y/N]: " ans || true
-    case "${ans,,}" in
-        y|yes)
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                log "DRY-RUN: reboot"
-            else
-                log "Rebooting..."
-                sleep 1
-                reboot
-            fi
-            ;;
-        *)
-            log "Not rebooting. Changes will take effect on next boot into the target image."
-            ;;
-    esac
-}
+# ... existing code ...
 
 main() {
     need_root
@@ -547,6 +185,12 @@ main() {
             -q|--no-handholding|--no-hand-holding)
                 NO_HANDHOLDING=1
                 ;;
+            --no-brew)
+                DISABLE_BREW=1
+                ;;
+            --no-fancontrol)
+                DISABLE_FANCONTROL=1
+                ;;
             -h|--help)
                 usage; exit 0
                 ;;
@@ -557,7 +201,7 @@ main() {
         shift
     done
 
-    log "Starting sonic-offline-customize version $SCRIPT_VERSION (dry-run=$DRY_RUN, no-handholding=$NO_HANDHOLDING)"
+    log "Starting sonic-offline-customize version $SCRIPT_VERSION (dry-run=$DRY_RUN, no-handholding=$NO_HANDHOLDING, no-brew=$DISABLE_BREW, no-fancontrol=$DISABLE_FANCONTROL)"
 
     # Optional: warn if running config differs from saved config
     if command -v show >/dev/null 2>&1 && command -v sonic-cfggen >/dev/null 2>&1; then
@@ -583,9 +227,11 @@ main() {
     target_dir=$(detect_newest_offline_image_dir) || die "Could not find any /host/image-* directories"
     verify_recent_install "$target_dir"
 
-    # Resolve offline root (fsroot within image dir if present)
+    # Resolve offline root (prefer 'rw' overlay, then fsroot, then dir)
     local offline_root
-    if [[ -d "$target_dir/fsroot" ]]; then
+    if [[ -d "$target_dir/rw" ]]; then
+        offline_root="$target_dir/rw"
+    elif [[ -d "$target_dir/fsroot" ]]; then
         offline_root="$target_dir/fsroot"
     else
         offline_root="$target_dir"
@@ -609,8 +255,16 @@ main() {
     copy_ssh_settings_and_keys "$offline_root"
     copy_admin_password_hash "$offline_root"
     update_fstab_for_flashdrive "$offline_root"
-    install_brew_first_boot_service "$offline_root"
-    install_fancontrol_assets "$offline_root" "$platform"
+    if [[ "$DISABLE_BREW" -eq 0 ]]; then
+        install_brew_first_boot_service "$offline_root"
+    else
+        log "Skipping Homebrew bootstrap (flagged --no-brew)"
+    fi
+    if [[ "$DISABLE_FANCONTROL" -eq 0 ]]; then
+        install_fancontrol_assets "$offline_root" "$platform"
+    else
+        log "Skipping fancontrol customization (flagged --no-fancontrol)"
+    fi
 
     local image_name
     image_name=$(image_dir_to_name "$target_dir")
