@@ -188,7 +188,7 @@ main() {
                     --rw-name) rw_name=${2:-}; shift ;;
                     --lower) lower=${2:-}; shift ;;
                     --dry-run|-n) dry_run=1 ;;
-                    --no-handholding|-q|--no-hand-holding) no_hand=1 ;;
+                    --no-handholding|-q|--no-hand-holding|--quiet) no_hand=1 ;;
                     --no-brew) no_brew=1 ;;
                     --no-fancontrol) no_fan=1 ;;
                     -h|--help) usage; exit 0 ;;
