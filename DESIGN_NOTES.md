@@ -52,5 +52,11 @@
 - Chrooted operations if future SONiC releases require it for certain tools.
 
 ### File Map
-- `sonic-offline-customize.sh`: main customization script (idempotent; supports `--dry-run`).
-- `sonic-offline-validate.sh`: pre-flight validation script (non-destructive).
+- `README.md`: Overview and usage
+- `DEVELOPER_NOTES.md`: Developer-focused details and flags
+- `DESIGN_NOTES.md`: Design goals, decisions, and future enhancements
+- `sonic-deploy.sh`: Orchestrator entrypoint
+- `sonic-offline-customize.sh`: Main customization (overlay-based)
+- `sonic-overlay.sh`: Overlay prepare/activate
+- `sonic-backup.sh`: Backup/restore
+- `sonic-offline-validate.sh`: Pre-flight validation
