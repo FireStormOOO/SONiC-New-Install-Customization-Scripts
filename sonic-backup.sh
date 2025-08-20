@@ -10,11 +10,12 @@ SCRIPT_VERSION="2025.08.20-1"
 usage() {
     cat <<USAGE
 Usage:
-  $0 backup   --output <path.tar.gz>
+  $0 backup   --output <path.tar.gz> [--source-root /]
   $0 restore  --input <path.tar.gz> --target-root </newroot>
 
 Options:
   --output        Path to write tar.gz (for backup)
+  --source-root   Root to back up from (default: /)
   --input         Path to read tar.gz (for restore)
   --target-root   Destination root to restore into (e.g., /newroot)
   -h, --help      Show this help
@@ -38,8 +39,9 @@ detect_platform() {
 }
 
 create_backup() {
-    local out="$1"
+    local out="$1" source_root="${2:-/}"
     [[ -n "$out" ]] || die "--output is required"
+    [[ -d "$source_root" ]] || die "--source-root not a directory"
 
     local work
     work=$(mktemp -d)
@@ -51,34 +53,35 @@ create_backup() {
     mkdir -p "$work/data" "$work/meta"
 
     # Collect files
-    if [[ -f /etc/sonic/config_db.json ]]; then
-        cp -a /etc/sonic/config_db.json "$work/data/" || true
+    if [[ -f "$source_root/etc/sonic/config_db.json" ]]; then
+        mkdir -p "$work/data/etc/sonic"
+        cp -a "$source_root/etc/sonic/config_db.json" "$work/data/etc/sonic/" || true
     fi
-    if [[ -d /home ]]; then
+    if [[ -d "$source_root/home" ]]; then
         mkdir -p "$work/data/home"
         rsync -aHAX --numeric-ids --delete-excluded \
             --exclude '*/.cache/*' --exclude '*/.local/share/Trash/*' \
-            /home/ "$work/data/home/" || cp -a /home/. "$work/data/home/" || true
+            "$source_root/home/" "$work/data/home/" || cp -a "$source_root/home/." "$work/data/home/" || true
     fi
-    if [[ -f /etc/ssh/sshd_config ]]; then
+    if [[ -f "$source_root/etc/ssh/sshd_config" ]]; then
         mkdir -p "$work/data/etc/ssh"
-        cp -a /etc/ssh/sshd_config "$work/data/etc/ssh/" || true
-        if [[ -d /etc/ssh/sshd_config.d ]]; then
+        cp -a "$source_root/etc/ssh/sshd_config" "$work/data/etc/ssh/" || true
+        if [[ -d "$source_root/etc/ssh/sshd_config.d" ]]; then
             mkdir -p "$work/data/etc/ssh/sshd_config.d"
-            cp -a /etc/ssh/sshd_config.d/. "$work/data/etc/ssh/sshd_config.d/" || true
+            cp -a "$source_root/etc/ssh/sshd_config.d/." "$work/data/etc/ssh/sshd_config.d/" || true
         fi
-        for key in /etc/ssh/ssh_host_*; do [[ -f "$key" ]] && cp -a "$key" "$work/data/etc/ssh/" || true; done
+        for key in "$source_root"/etc/ssh/ssh_host_*; do [[ -f "$key" ]] && cp -a "$key" "$work/data/etc/ssh/" || true; done
     fi
-    if grep -q '^admin:' /etc/shadow 2>/dev/null; then
-        awk -F: '/^admin:/{print $0}' /etc/shadow >"$work/meta/shadow.admin" || true
+    if [[ -f "$source_root/etc/shadow" ]] && grep -q '^admin:' "$source_root/etc/shadow" 2>/dev/null; then
+        awk -F: '/^admin:/{print $0}' "$source_root/etc/shadow" >"$work/meta/shadow.admin" || true
     fi
-    if [[ -f /etc/fstab ]]; then
+    if [[ -f "$source_root/etc/fstab" ]]; then
         mkdir -p "$work/data/etc"
-        cp -a /etc/fstab "$work/data/etc/" || true
+        cp -a "$source_root/etc/fstab" "$work/data/etc/" || true
     fi
-    if [[ -f "/etc/sonic/custom-fan/fancontrol" ]]; then
+    if [[ -f "$source_root/etc/sonic/custom-fan/fancontrol" ]]; then
         mkdir -p "$work/data/etc/sonic/custom-fan"
-        cp -a "/etc/sonic/custom-fan/fancontrol" "$work/data/etc/sonic/custom-fan/fancontrol" || true
+        cp -a "$source_root/etc/sonic/custom-fan/fancontrol" "$work/data/etc/sonic/custom-fan/fancontrol" || true
     fi
 
     # Manifest
@@ -154,18 +157,19 @@ restore_backup() {
 main() {
     need_root
     local cmd=${1:-}; shift || true
-    local output="" input="" target_root=""
+    local output="" input="" target_root="" source_root=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --output) output=${2:-}; shift ;;
             --input) input=${2:-}; shift ;;
             --target-root) target_root=${2:-}; shift ;;
+            --source-root) source_root=${2:-}; shift ;;
             -h|--help) usage; exit 0 ;;
             *) log "WARN: unknown arg $1" ;;
         esac; shift
     done
     case "$cmd" in
-        backup) create_backup "$output" ;;
+        backup) create_backup "$output" "$source_root" ;;
         restore) restore_backup "$input" "$target_root" ;;
         *) usage; exit 2 ;;
     esac

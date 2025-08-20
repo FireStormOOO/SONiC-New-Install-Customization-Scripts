@@ -226,7 +226,7 @@ main() {
             -n|--dry-run)
                 DRY_RUN=1
                 ;;
-            -q|--no-handholding|--no-hand-holding)
+            -q|--no-handholding|--no-hand-holding|--quiet)
                 NO_HANDHOLDING=1
                 ;;
             --no-brew)

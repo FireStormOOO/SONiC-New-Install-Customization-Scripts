@@ -8,7 +8,7 @@ Tools to customize the offline SONiC image (A/B model) before reboot to minimize
 - `sonic-offline-customize.sh` (idempotent): copies config, users, SSH settings, admin password hash, updates fstab, installs fancontrol override, and adds a first-boot Homebrew bootstrap service. Prompts to set next boot and to reboot.
 - `sonic-backup.sh`: backup/restore of key configuration to a tarball with a manifest.
 - `sonic-overlay.sh`: manage overlays for a target image dir; prepare `/newroot`, and activate by live-renaming overlay dirs.
-- `sonic-deploy.sh`: orchestrator to run common flows (backup, restore to overlay, install+customize).
+- `sonic-deploy.sh`: orchestrator to run common flows (backup, restore to overlay, install/reinstall + customize).
 
 ### Usage
 Copy to flashdrive and run from the active image as root:
@@ -31,6 +31,10 @@ sudo /workspace/sonic-deploy.sh restore --input /media/flashdrive/sonic-backup.t
 - Install new image from bin and customize (handles same-image vs new-image):
 ```bash
 sudo /workspace/sonic-deploy.sh install --bin /media/flashdrive/sonic-broadcom.bin
+```
+- Reinstall the current image (same-squashfs fresh overlay) and customize:
+```bash
+sudo /workspace/sonic-deploy.sh reinstall
 ```
 
 Flags:
