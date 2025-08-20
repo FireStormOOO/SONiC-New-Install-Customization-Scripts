@@ -12,6 +12,11 @@
 - `sonic-offline-customize.sh`: Main customize script (now overlay-based)
   - Prepares `/newroot` via `sonic-overlay.sh prepare` and applies all customizations against `/newroot`.
   - Installs a brew first-boot unit and a persistent fancontrol override unit by default (opt-out flags available).
+- `sonic-deploy.sh`: Orchestrator for common flows
+  - `backup`: wraps `sonic-backup.sh backup`
+  - `restore`: prepares overlay then runs `sonic-backup.sh restore` into `/newroot` (or custom target root)
+  - `install`: runs `sonic-installer install -y <bin>` then customizes overlay; auto-detects same-image vs new-image
+  - `reinstall`: same-image fresh overlay + customize + activation, no bin required
 - `DESIGN_NOTES.md`: High-level goals and decisions.
 - `README.md`: Usage and quick-start, including overlay flow.
 
@@ -26,7 +31,7 @@
 
 ### Flags (summary)
 - `sonic-offline-customize.sh`
-  - `--dry-run`, `--no-handholding`
+  - `--dry-run`, `--no-handholding`/`--quiet`
   - `--image-dir`, `--rw-name`, `--lower auto|fs|dir`
   - `--activate`, `--retain N`
   - `--no-brew`, `--no-fancontrol`
@@ -35,8 +40,13 @@
   - `activate --image-dir DIR --rw-name NAME [--retain N]`
   - `unmount`
 - `sonic-backup.sh`
-  - `backup --output FILE.tgz`
+  - `backup --output FILE.tgz [--source-root /]`
   - `restore --input FILE.tgz --target-root /newroot`
+- `sonic-deploy.sh`
+  - `backup --output FILE.tgz [--source-root /]`
+  - `restore [--image-dir DIR] [--rw-name NAME] [--lower auto|fs|dir] --input FILE.tgz [--target-root /newroot]`
+  - `install --bin path.bin [--rw-name NAME] [--lower auto|fs|dir] [--no-brew] [--no-fancontrol] [--no-handholding|--quiet] [--dry-run]`
+  - `reinstall [--rw-name NAME] [--lower auto|fs|dir] [--no-brew] [--no-fancontrol] [--no-handholding|--quiet] [--dry-run]`
 
 ### Same-image vs different-image
 - Different-image: After customizing `/newroot`, normal next-boot flow to the new image works; ensure that `rw-next` is renamed to `rw` before reboot if the image expects specific dir names.
@@ -44,7 +54,7 @@
 
 ### Logging and safety
 - Versioned logging at start; completion marker appended on success.
-- Fail-fast when `/newroot` isn’t mounted after prepare, or when required paths are missing.
+- Fail-fast when `/newroot` isn’t mounted after prepare, or when required paths are missing, with a consistent hint to run overlay prepare.
 - Dry-run echoes all file operations and overlay actions.
 
 ### Future improvements
