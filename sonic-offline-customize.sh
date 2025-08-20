@@ -122,7 +122,9 @@ verify_recent_install() {
     fi
     if [[ $age -le $WARN_THRESHOLD_SECONDS ]]; then
         local hrs=$((age / 3600))
-        log "WARN: '$dir' modified ${hrs} hours ago. Proceeding anyway."
+        log "WARN: '$dir' modified ${hrs} hours ago."
+        log "      This script is intended to customize a NEWLY INSTALLED image."
+        log "      If you meant to customize a new deployment, first run: 'sonic-installer install <image_or_url>' and then re-run this script."
         if [[ "$NO_HANDHOLDING" -eq 1 || "$DRY_RUN" -eq 1 ]]; then
             return 0
         fi
