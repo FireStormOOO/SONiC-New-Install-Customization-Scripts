@@ -90,17 +90,11 @@ check_binaries() {
 }
 
 detect_platform() {
-    local platform
+    local platform=""
     if command -v sonic-cfggen >/dev/null 2>&1; then
-        if platform=$(sonic-cfggen -H -v DEVICE_METADATA.localhost.platform 2>/dev/null || true); then
-            if [[ -n "$platform" ]]; then
-                echo "$platform"
-                return 0
-            fi
-        fi
+        platform=$(sonic-cfggen -H -v DEVICE_METADATA.localhost.platform 2>/dev/null || true)
     fi
-    # Fallback to user-provided known platform
-    echo "x86_64-cel_seastone-r0"
+    echo "$platform"
 }
 
 detect_newest_offline_image_dir() {
@@ -226,7 +220,11 @@ copy_homes() {
     if [[ "$DRY_RUN" -eq 1 ]]; then
         log "DRY-RUN: tar -C /home -cpf - . | tar -C $offline_root/home --numeric-owner -xpf -"
     else
-        ( cd /home && tar -cpf - . ) | ( cd "$offline_root/home" && tar --numeric-owner -xpf - )
+        if declare -F copy_dir_tar >/dev/null 2>&1; then
+            copy_dir_tar "/home" "$offline_root/home"
+        else
+            ( cd /home && tar -cpf - . ) | ( cd "$offline_root/home" && tar --numeric-owner -xpf - )
+        fi
     fi
     log "Copied /home"
 }
@@ -659,6 +657,9 @@ main() {
 
     local platform
     platform=$(detect_platform)
+    if [[ -z "$platform" ]]; then
+        die "Failed to detect platform via sonic-cfggen; aborting."
+    fi
     log "Detected platform: $platform"
 
     copy_config_db "$offline_root"
