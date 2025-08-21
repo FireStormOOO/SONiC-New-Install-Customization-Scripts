@@ -3,6 +3,34 @@
 # Common helpers for SONiC customization scripts
 # Note: Each function is defined only if not already present to avoid conflicts
 
+# Standard version for all scripts
+SONIC_SCRIPTS_VERSION="2025.08.20-5"
+
+# Standard script initialization
+if ! declare -F sonic_script_init >/dev/null 2>&1; then
+sonic_script_init() {
+    local script_name="${1:-$(basename "$0")}"
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]}")" && pwd)"
+    export SCRIPT_DIR
+    [[ ${EUID} -eq 0 ]] || { echo "ERROR: Must run as root" >&2; exit 1; }
+}
+fi
+
+# Standard logging function
+if ! declare -F log >/dev/null 2>&1; then
+log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
+fi
+
+# Standard error function
+if ! declare -F die >/dev/null 2>&1; then
+die() { log "ERROR: $*"; exit 1; }
+fi
+
+# Standard root check function
+if ! declare -F need_root >/dev/null 2>&1; then
+need_root() { [[ ${EUID} -eq 0 ]] || die "Must run as root"; }
+fi
+
 # Internal logger (falls back to echo)
 _sonic_common_log() {
     if declare -F log >/dev/null 2>&1; then

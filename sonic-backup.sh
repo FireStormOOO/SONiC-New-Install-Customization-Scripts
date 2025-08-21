@@ -5,7 +5,10 @@ set -euo pipefail
 # SONiC backup/restore helper
 # Creates a tarball with key configuration and an accompanying manifest
 
-SCRIPT_VERSION="2025.08.20-3"
+# source common helpers (required)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/sonic-common.sh"
 
 usage() {
     cat <<USAGE
@@ -21,18 +24,6 @@ Options:
   -h, --help      Show this help
 USAGE
 }
-
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
-die() { log "ERROR: $*"; exit 1; }
-
-need_root() {
-    if [[ ${EUID} -ne 0 ]]; then die "Must run as root"; fi
-}
-
-# source common helpers (required)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck disable=SC1091
-. "$SCRIPT_DIR/lib/sonic-common.sh"
 
 # prefer library detect_platform
 declare -F detect_platform >/dev/null 2>&1 || detect_platform() { echo unknown; }
@@ -100,7 +91,7 @@ create_backup() {
   "created_at": "$(date -Is)",
   "host": "$(hostname 2>/dev/null || echo unknown)",
   "platform": "$platform",
-  "script_version": "$SCRIPT_VERSION",
+  "script_version": "$SONIC_SCRIPTS_VERSION",
   "images": $(printf %q "$image_list" | sed 's/^"//;s/"$//;s/\n/\n/g' | sed 's/^/"/;s/$/"/'),
   "paths": ["/etc/sonic/config_db.json","/home","/etc/ssh","/etc/fstab","/etc/sonic/custom-fan/fancontrol"]
 }
