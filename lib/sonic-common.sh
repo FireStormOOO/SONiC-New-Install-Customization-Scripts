@@ -61,17 +61,63 @@ drysh() {
 }
 fi
 
+# Enhanced dry run helpers for common operations
+if ! declare -F dry_cp >/dev/null 2>&1; then
+dry_cp() {
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        _sonic_common_log "DRY-RUN: cp $*"
+    else
+        cp "$@"
+    fi
+}
+fi
+
+if ! declare -F dry_touch >/dev/null 2>&1; then
+dry_touch() {
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        _sonic_common_log "DRY-RUN: touch $*"
+    else
+        touch "$@"
+    fi
+}
+fi
+
+if ! declare -F dry_chmod >/dev/null 2>&1; then
+dry_chmod() {
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        _sonic_common_log "DRY-RUN: chmod $*"
+    else
+        chmod "$@"
+    fi
+}
+fi
+
+if ! declare -F dry_echo_append >/dev/null 2>&1; then
+dry_echo_append() {
+    local content="$1" file="$2"
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        _sonic_common_log "DRY-RUN: echo '$content' >> $file"
+    else
+        echo "$content" >> "$file"
+    fi
+}
+fi
+
+if ! declare -F dry_exec >/dev/null 2>&1; then
+dry_exec() {
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        _sonic_common_log "DRY-RUN: $*"
+    else
+        "$@"
+    fi
+}
+fi
+
 # Ensure directory exists (DRY-RUN aware)
 if ! declare -F ensure_dir >/dev/null 2>&1; then
 ensure_dir() {
 	local d="$1"
-	if [[ ! -d "$d" ]]; then
-		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-			_sonic_common_log "DRY-RUN: mkdir -p $d"
-		else
-			mkdir -p "$d"
-		fi
-	fi
+	[[ -d "$d" ]] || dry mkdir -p "$d"
 }
 fi
 
@@ -137,11 +183,7 @@ enable_service_in_offline() {
 	local offline_root="$1" unit_name="$2"
 	ensure_dir "$offline_root/etc/systemd/system/multi-user.target.wants"
 	if [[ -f "$offline_root/etc/systemd/system/$unit_name" ]]; then
-		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-			_sonic_common_log "DRY-RUN: ln -sf ../$unit_name $offline_root/etc/systemd/system/multi-user.target.wants/$unit_name"
-		else
-			ln -sf "../$unit_name" "$offline_root/etc/systemd/system/multi-user.target.wants/$unit_name"
-		fi
+		dry ln -sf "../$unit_name" "$offline_root/etc/systemd/system/multi-user.target.wants/$unit_name"
 	fi
 }
 fi
