@@ -412,36 +412,20 @@ main() {
     fi
     log "Detected platform: $platform"
 
-    if declare -F copy_config_db_to_root >/dev/null 2>&1; then
-        copy_config_db_to_root "$offline_root"
-        log "Copied config_db.json"
-    else
-        copy_config_db "$offline_root"
-    fi
+    copy_config_db_to_root "$offline_root"
+    log "Copied config_db.json"
     copy_homes "$offline_root"
     copy_ssh_settings_and_keys "$offline_root"
-    if declare -F migrate_password_hash_to_root >/dev/null 2>&1; then
-        migrate_password_hash_to_root "$offline_root" "admin"
-        log "Migrated admin password hash"
-    else
-        copy_admin_password_hash "$offline_root"
-    fi
+    migrate_password_hash_to_root "$offline_root" "admin"
+    log "Migrated admin password hash"
     update_fstab_for_flashdrive "$offline_root"
     if [[ "$DISABLE_BREW" -eq 0 ]]; then
-        if declare -F install_brew_first_boot_service_to_root >/dev/null 2>&1; then
-            install_brew_first_boot_service_to_root "$offline_root"
-        else
-            install_brew_first_boot_service "$offline_root"
-        fi
+        install_brew_first_boot_service_to_root "$offline_root"
     else
         log "Skipping Homebrew bootstrap (flagged --no-brew)"
     fi
     if [[ "$DISABLE_FANCONTROL" -eq 0 ]]; then
-        if declare -F install_fancontrol_assets_to_root >/dev/null 2>&1; then
-            install_fancontrol_assets_to_root "$offline_root" "$platform"
-        else
-            install_fancontrol_assets "$offline_root" "$platform"
-        fi
+        install_fancontrol_assets_to_root "$offline_root" "$platform"
     else
         log "Skipping fancontrol customization (flagged --no-fancontrol)"
     fi

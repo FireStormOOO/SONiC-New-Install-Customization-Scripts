@@ -5,7 +5,7 @@ set -euo pipefail
 # SONiC backup/restore helper
 # Creates a tarball with key configuration and an accompanying manifest
 
-SCRIPT_VERSION="2025.08.20-2"
+SCRIPT_VERSION="2025.08.20-3"
 
 usage() {
     cat <<USAGE
@@ -29,12 +29,10 @@ need_root() {
     if [[ ${EUID} -ne 0 ]]; then die "Must run as root"; fi
 }
 
-# source common helpers
+# source common helpers (required)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [[ -f "$SCRIPT_DIR/lib/sonic-common.sh" ]]; then
-    # shellcheck disable=SC1091
-    . "$SCRIPT_DIR/lib/sonic-common.sh"
-fi
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/sonic-common.sh"
 
 # prefer library detect_platform
 declare -F detect_platform >/dev/null 2>&1 || detect_platform() { echo unknown; }
@@ -56,14 +54,14 @@ create_backup() {
     # Collect files
     if [[ -f "$source_root/etc/sonic/config_db.json" ]]; then
         mkdir -p "$work/data/etc/sonic"
-        cp -a "$source_root/etc/sonic/config_db.json" "$work/data/etc/sonic/" || true
+        dry cp -a "$source_root/etc/sonic/config_db.json" "$work/data/etc/sonic/" || true
     fi
     if [[ -d "$source_root/home" ]]; then
         mkdir -p "$work/data/home"
         if declare -F copy_dir_tar >/dev/null 2>&1; then
             copy_dir_tar "$source_root/home" "$work/data/home"
         else
-            ( cd "$source_root/home" && tar -cpf - . ) | ( cd "$work/data/home" && tar --numeric-owner -xpf - )
+            drysh "( cd \"$source_root/home\" && tar -cpf - . ) | ( cd \"$work/data/home\" && tar --numeric-owner -xpf - )"
         fi
     fi
     if [[ -f "$source_root/etc/ssh/sshd_config" || -d "$source_root/etc/ssh/sshd_config.d" ]]; then
@@ -72,12 +70,12 @@ create_backup() {
             copy_ssh_tree_to_root "$source_root" "$work/data"
         else
             mkdir -p "$work/data/etc/ssh"
-            [[ -f "$source_root/etc/ssh/sshd_config" ]] && cp -a "$source_root/etc/ssh/sshd_config" "$work/data/etc/ssh/" || true
+            [[ -f "$source_root/etc/ssh/sshd_config" ]] && dry cp -a "$source_root/etc/ssh/sshd_config" "$work/data/etc/ssh/" || true
             if [[ -d "$source_root/etc/ssh/sshd_config.d" ]]; then
                 mkdir -p "$work/data/etc/ssh/sshd_config.d"
-                cp -a "$source_root/etc/ssh/sshd_config.d/." "$work/data/etc/ssh/sshd_config.d/" || true
+                dry cp -a "$source_root/etc/ssh/sshd_config.d/." "$work/data/etc/ssh/sshd_config.d/" || true
             fi
-            for key in "$source_root"/etc/ssh/ssh_host_*; do [[ -f "$key" ]] && cp -a "$key" "$work/data/etc/ssh/" || true; done
+            for key in "$source_root"/etc/ssh/ssh_host_*; do [[ -f "$key" ]] && dry cp -a "$key" "$work/data/etc/ssh/" || true; done
         fi
     fi
     if [[ -f "$source_root/etc/shadow" ]] && grep -q '^admin:' "$source_root/etc/shadow" 2>/dev/null; then
@@ -85,11 +83,11 @@ create_backup() {
     fi
     if [[ -f "$source_root/etc/fstab" ]]; then
         mkdir -p "$work/data/etc"
-        cp -a "$source_root/etc/fstab" "$work/data/etc/" || true
+        dry cp -a "$source_root/etc/fstab" "$work/data/etc/" || true
     fi
     if [[ -f "$source_root/etc/sonic/custom-fan/fancontrol" ]]; then
         mkdir -p "$work/data/etc/sonic/custom-fan"
-        cp -a "$source_root/etc/sonic/custom-fan/fancontrol" "$work/data/etc/sonic/custom-fan/fancontrol" || true
+        dry cp -a "$source_root/etc/sonic/custom-fan/fancontrol" "$work/data/etc/sonic/custom-fan/fancontrol" || true
     fi
 
     # Manifest
@@ -103,7 +101,7 @@ create_backup() {
   "host": "$(hostname 2>/dev/null || echo unknown)",
   "platform": "$platform",
   "script_version": "$SCRIPT_VERSION",
-  "images": $(printf %q "$image_list" | sed 's/^"//;s/"$//;s/\\n/\\n/g' | sed 's/^/"/;s/$/"/'),
+  "images": $(printf %q "$image_list" | sed 's/^"//;s/"$//;s/\n/\n/g' | sed 's/^/"/;s/$/"/'),
   "paths": ["/etc/sonic/config_db.json","/home","/etc/ssh","/etc/fstab","/etc/sonic/custom-fan/fancontrol"]
 }
 EOF
@@ -126,14 +124,14 @@ restore_backup() {
     # Restore files
     if [[ -f "$work/data/etc/sonic/config_db.json" ]]; then
         mkdir -p "$target_root/etc/sonic"
-        cp -a "$work/data/etc/sonic/config_db.json" "$target_root/etc/sonic/config_db.json"
+        dry cp -a "$work/data/etc/sonic/config_db.json" "$target_root/etc/sonic/config_db.json"
     fi
     if [[ -d "$work/data/home" ]]; then
         mkdir -p "$target_root/home"
         if declare -F copy_dir_tar >/dev/null 2>&1; then
             copy_dir_tar "$work/data/home" "$target_root/home"
         else
-            ( cd "$work/data/home" && tar -cpf - . ) | ( cd "$target_root/home" && tar --numeric-owner -xpf - )
+            drysh "( cd \"$work/data/home\" && tar -cpf - . ) | ( cd \"$target_root/home\" && tar --numeric-owner -xpf - )"
         fi
     fi
     if [[ -d "$work/data/etc/ssh" ]]; then
@@ -141,16 +139,16 @@ restore_backup() {
             copy_ssh_tree_to_root "$work/data" "$target_root"
         else
             mkdir -p "$target_root/etc/ssh"
-            cp -a "$work/data/etc/ssh/." "$target_root/etc/ssh/"
+            dry cp -a "$work/data/etc/ssh/." "$target_root/etc/ssh/"
         fi
     fi
     if [[ -f "$work/data/etc/fstab" ]]; then
         mkdir -p "$target_root/etc"
-        cp -a "$work/data/etc/fstab" "$target_root/etc/fstab"
+        dry cp -a "$work/data/etc/fstab" "$target_root/etc/fstab"
     fi
     if [[ -f "$work/data/etc/sonic/custom-fan/fancontrol" ]]; then
         mkdir -p "$target_root/etc/sonic/custom-fan"
-        cp -a "$work/data/etc/sonic/custom-fan/fancontrol" "$target_root/etc/sonic/custom-fan/fancontrol"
+        dry cp -a "$work/data/etc/sonic/custom-fan/fancontrol" "$target_root/etc/sonic/custom-fan/fancontrol"
     fi
     # Shadow admin line
     if [[ -f "$work/meta/shadow.admin" ]] && [[ -f "$target_root/etc/shadow" ]]; then
@@ -159,7 +157,7 @@ restore_backup() {
         if declare -F upsert_shadow_line >/dev/null 2>&1; then
             upsert_shadow_line "$target_root/etc/shadow" admin "$line"
         else
-            cp -a "$target_root/etc/shadow" "$target_root/etc/shadow.bak.$(date +%s)" || true
+            dry cp -a "$target_root/etc/shadow" "$target_root/etc/shadow.bak.$(date +%s)" || true
             if grep -qE '^admin:' "$target_root/etc/shadow"; then
                 sed -i "s%^admin:[^:]*:%${line%%:*}:${line#*:}%" "$target_root/etc/shadow" || {
                     sed -i "\%^admin:% d" "$target_root/etc/shadow"; echo "$line" >>"$target_root/etc/shadow"; }
