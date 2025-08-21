@@ -12,6 +12,27 @@ _sonic_common_log() {
     fi
 }
 
+# DRY-RUN helpers
+if ! declare -F dry >/dev/null 2>&1; then
+dry() {
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        _sonic_common_log "DRY-RUN: $*"
+    else
+        "$@"
+    fi
+}
+fi
+
+if ! declare -F drysh >/dev/null 2>&1; then
+drysh() {
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        _sonic_common_log "DRY-RUN: $*"
+    else
+        bash -lc "$*"
+    fi
+}
+fi
+
 # Ensure directory exists (DRY-RUN aware)
 if ! declare -F ensure_dir >/dev/null 2>&1; then
 ensure_dir() {
