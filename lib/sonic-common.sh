@@ -4,7 +4,7 @@
 # Note: Each function is defined only if not already present to avoid conflicts
 
 # Standard version for all scripts
-SONIC_SCRIPTS_VERSION="0.5.0"
+SONIC_SCRIPTS_VERSION="0.5.1"
 
 # Standard script initialization
 if ! declare -F sonic_script_init >/dev/null 2>&1; then
