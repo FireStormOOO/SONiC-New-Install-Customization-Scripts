@@ -258,7 +258,7 @@ Wants=pmon.service network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'set -e; SRC=/etc/sonic/custom-fan/fancontrol; DST=/usr/share/sonic/device/$platform/fancontrol; if [ -f "$SRC" ]; then cp -f "$SRC" "$DST"; systemctl restart pmon.service; else echo "fancontrol override: $SRC not present; skipping"; fi'
+ExecStart=/bin/sh -c 'set -e; SRC=/etc/sonic/custom-fan/fancontrol; DST=/usr/share/sonic/device/${platform}/fancontrol; if [ -f "\$SRC" ]; then cp -f "\$SRC" "\$DST"; systemctl restart pmon.service; else echo "fancontrol override: \$SRC not present; skipping"; fi'
 
 [Install]
 WantedBy=multi-user.target
