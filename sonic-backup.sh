@@ -59,9 +59,14 @@ create_backup() {
     fi
     if [[ -d "$source_root/home" ]]; then
         mkdir -p "$work/data/home"
-        rsync -aHAX --numeric-ids --delete-excluded \
-            --exclude '*/.cache/*' --exclude '*/.local/share/Trash/*' \
-            "$source_root/home/" "$work/data/home/" || cp -a "$source_root/home/." "$work/data/home/" || true
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -aHAX --numeric-ids --delete-excluded \
+                --exclude '*/.cache/*' --exclude '*/.local/share/Trash/*' \
+                "$source_root/home/" "$work/data/home/" || cp -a "$source_root/home/." "$work/data/home/" || true
+        else
+            # tar fallback for same-host copy with metadata
+            ( cd "$source_root/home" && tar -cpf - . ) | ( cd "$work/data/home" && tar -xpf - ) || cp -a "$source_root/home/." "$work/data/home/" || true
+        fi
     fi
     if [[ -f "$source_root/etc/ssh/sshd_config" ]]; then
         mkdir -p "$work/data/etc/ssh"
@@ -122,7 +127,11 @@ restore_backup() {
     fi
     if [[ -d "$work/data/home" ]]; then
         mkdir -p "$target_root/home"
-        rsync -aHAX --numeric-ids "$work/data/home/" "$target_root/home/" || cp -a "$work/data/home/." "$target_root/home/"
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -aHAX --numeric-ids "$work/data/home/" "$target_root/home/" || cp -a "$work/data/home/." "$target_root/home/"
+        else
+            ( cd "$work/data/home" && tar -cpf - . ) | ( cd "$target_root/home" && tar -xpf - ) || cp -a "$work/data/home/." "$target_root/home/"
+        fi
     fi
     if [[ -d "$work/data/etc/ssh" ]]; then
         mkdir -p "$target_root/etc/ssh"
