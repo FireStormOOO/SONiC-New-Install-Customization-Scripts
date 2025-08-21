@@ -462,20 +462,24 @@ def main():
     backup_parser = subparsers.add_parser('backup', help='Create state backup')
     backup_parser.add_argument('--source', default='/', help='Source root path')
     backup_parser.add_argument('--output', required=True, help='Backup file path')
+    backup_parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
     
     # Restore command  
     restore_parser = subparsers.add_parser('restore', help='Restore state from backup')
     restore_parser.add_argument('--input', required=True, help='Backup file path')
     restore_parser.add_argument('--target', required=True, help='Target root path')
+    restore_parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
     
     # Migrate command
     migrate_parser = subparsers.add_parser('migrate', help='Migrate state between filesystems')
     migrate_parser.add_argument('--source', default='/', help='Source root path')
     migrate_parser.add_argument('--target', required=True, help='Target root path')
+    migrate_parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
     
     # Validate command
     validate_parser = subparsers.add_parser('validate', help='Validate state components')
     validate_parser.add_argument('--source', default='/', help='Source root path to validate')
+    validate_parser.add_argument('--dry-run', action='store_true', help='Show what would be done')
     
     args = parser.parse_args()
     
