@@ -147,11 +147,7 @@ enable_service_in_offline() {
 }
 fi
 
-# REMOVED: copy_dir_tar - now handled by Python sonic_state.py
 
-# REMOVED: copy_ssh_tree_to_root - now handled by Python sonic_state.py
-
-# REMOVED: upsert_shadow_line - now handled by Python sonic_state.py
 
 # Update offline fstab with flashdrive UUID entry if mounted. FLASH_MOUNT can be overridden by env.
 if ! declare -F update_fstab_for_flashdrive >/dev/null 2>&1; then
@@ -272,7 +268,7 @@ EOF
 }
 fi
 
-# REMOVED: copy_config_db_to_root - now handled by Python sonic_state.py
+
 
 # Initialize log file under offline root and copy self script for traceability
 if ! declare -F init_log_and_copy_self_to_root >/dev/null 2>&1; then
@@ -290,15 +286,15 @@ init_log_and_copy_self_to_root() {
 	ensure_dir "$offline_root/usr/local/sbin"
 	if [[ -n "$self_path" ]]; then
 		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-			_sonic_common_log "DRY-RUN: cp -a $self_path $offline_root/usr/local/sbin/sonic-offline-customize.sh"
+			_sonic_common_log "DRY-RUN: cp -a $self_path $offline_root/usr/local/sbin/sonic-upgrade-helper"
 		else
-			cp -a "$self_path" "$offline_root/usr/local/sbin/sonic-offline-customize.sh" || true
+			cp -a "$self_path" "$offline_root/usr/local/sbin/sonic-upgrade-helper" || true
 		fi
 	fi
 	echo "$logfile"
 }
 fi
 
-# REMOVED: migrate_password_hash_to_root - now handled by Python sonic_state.py
+
 
 
