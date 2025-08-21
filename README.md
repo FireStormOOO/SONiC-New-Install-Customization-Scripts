@@ -1,16 +1,11 @@
 ## SONiC Upgrade Helper
 
 ### Overview
-Unified interface for SONiC image management with hybrid bash/Python architecture. Streamlines backup, installation, customization, and restoration workflows for SONiC switches that aren't centrally managed.
+These scripts exist to simplify upgrades to SONiC switches that aren't centrally managed, transferring a reasonable amount of user state and basic configuration across to the new image, and enabling save/restore of the same. Built with version 202411 in mind but most of this should be version agnostic. Fan curve stuff will be fairly specific to a given deployment (e.g. author flipped all the fans around to reverse airflow direction and then reduced noise) but the general approach should apply. Homebrew installed by default to have a little more choice of admin tools. Some assumptions are geared to Seastone DX010 switches, defaults may not be reasonable if you're using something else; by default assumes a flash drive is present for upgrades and mounted at /media/flashdrive and is left available (DX010 has only a 16GB internal flash).
 
-**Key Features:**
-- Single command interface for all common workflows
-- Hybrid architecture: Bash for system integration, Python for state management
-- Clean separation of concerns: What (state) vs Where (source/dest) vs How (operations)
-- Built for SONiC 202411 but designed to be version-agnostic
-- Preserves user state and configuration across upgrades
+**Status:** Beta quality, tested on a narrow slice of hardware. Use with appropriate caution. Flaws in this tool's copy feature may also exist in the backup/restore; manually backup anything you can't afford to lose.
 
-**Status:** Production-ready consolidated version. Extensively refactored from original alpha scripts.
+**Architecture:** Unified interface with hybrid bash/Python design. Bash handles system integration and user interaction, Python manages complex state operations and data validation.
 
 ### Architecture
 
@@ -38,19 +33,19 @@ The system manages these state components consistently across all operations:
 
 ### Usage
 
-**Common Workflows:**
+Run from the active image as root. Common workflows:
 
 Save current system state:
 ```bash
-sudo sonic-upgrade-helper save --output my-setup.tar.gz
+sudo sonic-upgrade-helper save --output /media/flashdrive/my-setup.tar.gz
 ```
 
 Install new image with settings restoration:
 ```bash
-sudo sonic-upgrade-helper install sonic-image-202411.bin --restore my-setup.tar.gz --activate
+sudo sonic-upgrade-helper install /media/flashdrive/sonic-202411.bin --restore /media/flashdrive/my-setup.tar.gz --activate
 ```
 
-Re-customize current image (after config changes):
+Re-customize current image (same-squashfs fresh overlay) after config changes:
 ```bash
 sudo sonic-upgrade-helper reinstall --activate
 ```
@@ -76,23 +71,18 @@ sonic-upgrade-helper state restore --input backup.tar.gz --target /newroot
 sonic-upgrade-helper state validate  # Debug/testing
 ```
 
-**Global Options:**
+**Common Options:**
 - `--dry-run` (`-n`): Show planned actions without making changes
-- `--quiet` (`-q`): Minimize output, skip confirmations
+- `--quiet` (`-q`): Skip non-essential confirmations
+- `--no-brew`, `--no-fancontrol`: Skip those customizations
 - `--help` (`-h`): Show help for any command
 
-### Complete Upgrade Example
+Advanced overlay usage and development details are documented in `DEVELOPER_NOTES.md`.
 
-```bash
-# 1. Save current setup
-sudo sonic-upgrade-helper save --output /media/flashdrive/backup.tar.gz
+### Notes
 
-# 2. Install new image with restoration
-sudo sonic-upgrade-helper install /media/flashdrive/sonic-202411.bin \
-    --restore /media/flashdrive/backup.tar.gz --activate
-
-# 3. Reboot to new image (when prompted)
-```
+- The customize script is versioned and logs its version and completion marker into the offline image at `var/log/sonic-offline-customize.log`.
+- Custom fan curve file expected at `/media/flashdrive/fancontrol-custom4.bak`. It is persisted into the offline image at `etc/sonic/custom-fan/fancontrol`, and restored on every boot by `fancontrol-override.service`.
 
 ### Customizations Applied
 
