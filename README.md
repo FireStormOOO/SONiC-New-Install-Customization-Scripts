@@ -1,9 +1,9 @@
 ## SONiC New Install Customization Scripts
 
 ### Overview
-Scripts to simplify upgrades on SONiC switches without central management. They transfer a reasonable set of user state and base configuration to the next boot image, and support saving/restoring the same. Built with SONiC 202411 in mind, but most logic is version-agnostic. Fan curve tweaks are deployment-specific (e.g., reversed airflow and noise reduction), but the pattern is reusable. Homebrew is installed by default to provide more admin tooling.
+These scripts exists to simplify upgrades to SONiC switches that aren't centrally managed, transferring a reasonable amount of user state and basic configuration across to the new image, and enabling save/restore of the same.  Built with version 202411 in mind but most of this should be version agnostic.  Fan curve stuff will be fairly specific to a given deployment (e.g. author flipped all the fans around to reverse airflow direction and then reduced noise) but the general approach should apply.  Homebrew installed by default to have a little more choice of admin tools.  Some assumptions are geared to Seastone DX010 switches, defaults may not be reasonable if you're using somethning else; by default assumes a flash drive is present for upgrades and mounted at /media/flashdrive and is left available (DX010 has only a 16GB internal flash).
 
-Status: alpha quality, minimally tested. Use with care and review the outputs.
+Status: alpha quality, minimally tested on a narrow slice of hardware. Use with care, no warranty, etc.  Flaws in this tool's copy feature may also existing in the backup/restore; manually backup anything you can't afford to lose.
 
 ### Scripts
 - `sonic-deploy.sh`: orchestrator for common flows (backup, restore to overlay, install/reinstall + customize).
