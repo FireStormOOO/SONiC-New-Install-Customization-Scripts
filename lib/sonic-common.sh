@@ -339,4 +339,45 @@ init_log_and_copy_self_to_root() {
 }
 fi
 
+# Migrate password hash for a user from current /etc/shadow into offline root's /etc/shadow
+if ! declare -F migrate_password_hash_to_root >/dev/null 2>&1; then
+migrate_password_hash_to_root() {
+	local offline_root="$1" user_name="${2:-admin}"
+	if [[ ! -r /etc/shadow ]]; then
+		_sonic_common_log "WARN: /etc/shadow not readable; skipping password migration"
+		return 0
+	fi
+	if ! grep -qE "^${user_name}:" /etc/shadow 2>/dev/null; then
+		_sonic_common_log "WARN: user '$user_name' not found in /etc/shadow; skipping password migration"
+		return 0
+	fi
+	local line
+	line=$(grep -E "^${user_name}:" /etc/shadow)
+	local target_shadow="$offline_root/etc/shadow"
+	if [[ ! -f "$target_shadow" ]]; then
+		_sonic_common_log "WARN: $target_shadow not found; skipping password migration"
+		return 0
+	fi
+	if declare -F upsert_shadow_line >/dev/null 2>&1; then
+		upsert_shadow_line "$target_shadow" "$user_name" "$line"
+	else
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: cp -a $target_shadow $target_shadow.bak.$(date +%s)"
+			_sonic_common_log "DRY-RUN: update or append shadow entry for $user_name"
+		else
+			cp -a "$target_shadow" "$target_shadow.bak.$(date +%s)" || true
+			if grep -qE "^${user_name}:" "$target_shadow"; then
+				sed -i "s%^${user_name}:[^:]*:%${line%%:*}:${line#*:}%" "$target_shadow" || {
+					sed -i "\%^${user_name}:% d" "$target_shadow"; echo "$line" >>"$target_shadow"
+				}
+			else
+				echo "$line" >>"$target_shadow"
+			fi
+			chmod 640 "$target_shadow" 2>/dev/null || true
+			chown root:shadow "$target_shadow" 2>/dev/null || true
+		fi
+	fi
+}
+fi
+
 

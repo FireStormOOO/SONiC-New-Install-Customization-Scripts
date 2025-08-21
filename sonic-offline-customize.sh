@@ -679,7 +679,12 @@ main() {
     fi
     copy_homes "$offline_root"
     copy_ssh_settings_and_keys "$offline_root"
-    copy_admin_password_hash "$offline_root"
+    if declare -F migrate_password_hash_to_root >/dev/null 2>&1; then
+        migrate_password_hash_to_root "$offline_root" "admin"
+        log "Migrated admin password hash"
+    else
+        copy_admin_password_hash "$offline_root"
+    fi
     update_fstab_for_flashdrive "$offline_root"
     if [[ "$DISABLE_BREW" -eq 0 ]]; then
         if declare -F install_brew_first_boot_service_to_root >/dev/null 2>&1; then
