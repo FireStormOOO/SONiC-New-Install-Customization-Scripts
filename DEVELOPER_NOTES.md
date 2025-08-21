@@ -18,7 +18,7 @@
   - `install`: runs `sonic-installer install -y <bin>` then customizes overlay; auto-detects same-image vs new-image
   - `reinstall`: same-image fresh overlay + customize + activation, no bin required
 - `DESIGN_NOTES.md`: High-level goals and decisions.
-- `README.md`: Usage and quick-start, including overlay flow.
+- `README.md`: Brief synopsis and common usage.
 
 ### Key behaviors and assumptions
 - Always customize an overlay mounted at `/newroot`; upstream image can be the same image or different — the customize steps don’t care.

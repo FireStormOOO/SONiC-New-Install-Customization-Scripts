@@ -45,6 +45,18 @@
 - Permission adjustments: shadow file writes guarded; backups created.
 - Symlink enablement for services done by creating `multi-user.target.wants` links within the offline image.
 
+### Overlay rationale and constraints
+- Why overlays: SONiC images typically boot a squashfs rootfs with an overlay upper/work under `/host/image-<tag>/{rw,work}`. We need a safe way to prepare “next boot” state without disturbing the live system. Writing directly into the live merged root (`/`) is unsafe; writing into the image dir depends on the lower layout (squashfs vs fsroot). Preparing a second overlay at `/newroot` abstracts those differences and makes all customizations uniform.
+- Same-image limitation: SONiC won’t install the exact same image tag to both slots. When operators want a clean slate on the same squashfs, we prepare a fresh overlay and “make-before-break” by renaming overlay dirs (`rw/work` ↔ `rw-next/work-next`) while live. The kernel keeps references to the old dirs until reboot, so the swap only affects the next boot.
+- Activation timing: We avoid shutdown-time hooks because late shutdown may lack tools/paths after unmount. Live renames are deterministic and simple.
+- Lowerdir detection: Prefer `fs.squashfs` when present for read-only lower. Some builds use `fsroot/` instead. If neither exists, we fail fast rather than risk corrupting the image.
+- Boot entries: We do not attempt to fabricate new GRUB entries pointing at the same squashfs; that would couple us to `sonic-installer` internals. The overlay swap is simpler and robust.
+- pmon/fancontrol: Platform thermal services can overwrite fan curves at boot. We install a persistent override unit that copies our curve from `/etc/sonic/custom-fan/fancontrol` to the platform path and restarts `pmon` once each boot.
+- Brew: Homebrew bootstrap assumes network and `curl`. It is installed as a guarded oneshot; absence of `curl` is non-fatal.
+- /newroot guardrails: Any command that assumes `/newroot` exists checks for a mounted overlay and emits a clear hint to run `sonic-overlay.sh prepare ... --mount` when missing.
+- Heuristics: Newest image detection uses mtime of `rw/` (preferred) or `fsroot/`. Recency check warns >4h and strongly warns >72h to protect against unintended edits to older images.
+- Space & rsync: We estimate headroom for copying `/home` and prefer rsync with numeric-ids/xattrs; scripts fall back to `cp -a` if rsync is absent.
+
 ### Future Enhancements
 - Optional `--target <image>` to pick a specific offline image.
 - Post-boot health check unit to verify fan curve application and service states.
@@ -52,5 +64,11 @@
 - Chrooted operations if future SONiC releases require it for certain tools.
 
 ### File Map
-- `sonic-offline-customize.sh`: main customization script (idempotent; supports `--dry-run`).
-- `sonic-offline-validate.sh`: pre-flight validation script (non-destructive).
+- `README.md`: Overview and usage
+- `DEVELOPER_NOTES.md`: Developer-focused details and flags
+- `DESIGN_NOTES.md`: Design goals, decisions, and future enhancements
+- `sonic-deploy.sh`: Orchestrator entrypoint
+- `sonic-offline-customize.sh`: Main customization (overlay-based)
+- `sonic-overlay.sh`: Overlay prepare/activate
+- `sonic-backup.sh`: Backup/restore
+- `sonic-offline-validate.sh`: Pre-flight validation
