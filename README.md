@@ -1,7 +1,9 @@
 ## SONiC New Install Customization Scripts
 
 ### Overview
-Tools to customize the offline SONiC image (A/B model) before reboot to minimize downtime. Targeted for SONiC 202411 on Seastone DX010 (`x86_64-cel_seastone-r0`). Offline image roots are auto-detected; if present, the writable overlay `rw/` is used; otherwise `fsroot/` or the image dir.
+Scripts to simplify upgrades on SONiC switches without central management. They transfer a reasonable set of user state and base configuration to the next boot image, and support saving/restoring the same. Built with SONiC 202411 in mind, but most logic is version-agnostic. Fan curve tweaks are deployment-specific (e.g., reversed airflow and noise reduction), but the pattern is reusable. Homebrew is installed by default to provide more admin tooling.
+
+Status: alpha quality, minimally tested. Use with care and review the outputs.
 
 ### Scripts
 - `sonic-deploy.sh`: orchestrator for common flows (backup, restore to overlay, install/reinstall + customize).
@@ -10,8 +12,16 @@ Tools to customize the offline SONiC image (A/B model) before reboot to minimize
 - `sonic-backup.sh`: backup/restore key configuration.
 - `sonic-overlay.sh`: prepare and activate overlays (advanced).
 
+What we transfer/customize (succinct):
+- Existing admin password (hash) for the target root
+- SSH server config and host keys; user SSH keys
+- `config_db.json` and user home directories (`/home`)
+- `fstab` with auto-mount entry for the flashdrive
+- Fan curve: persistent custom curve applied on each boot via override
+- Homebrew: first-boot installer oneshot (network + `curl` required)
+
 ### Usage
-Run from the active image as root. Orchestrated flows:
+Run from the active image as root. Orchestrated flows (wraps SONiC `sonic-installer` for installs; also supports in-place reinstall):
 - Backup running system:
 ```bash
 sudo /workspace/sonic-deploy.sh backup --output /media/flashdrive/sonic-backup.tgz
@@ -40,5 +50,7 @@ Advanced overlay usage is documented in `DEVELOPER_NOTES.md`.
 - The customize script is versioned and logs its version and completion marker into the offline image at `var/log/sonic-offline-customize.log`.
 - Custom fan curve file expected at `/media/flashdrive/fancontrol-custom4.bak`. It is persisted into the offline image at `etc/sonic/custom-fan/fancontrol`, and restored on every boot by `fancontrol-override.service`.
 
-See `DESIGN_NOTES.md` for design decisions and details.
+License: GPL-3.0-only (see `LICENSE`).
+
+See `DESIGN_NOTES.md` for design rationale and constraints, and `DEVELOPER_NOTES.md` for implementation details.
 
