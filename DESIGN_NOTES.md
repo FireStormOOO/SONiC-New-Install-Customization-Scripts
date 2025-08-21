@@ -1,4 +1,4 @@
-## SONiC Offline Customization - Design Notes
+## SONiC Upgrade Helper - Design Notes
 
 ### Goals
 - Prepare the offline SONiC image (A/B model) with site-specific configuration before reboot, minimizing downtime.
@@ -25,18 +25,38 @@
 - Fancontrol persistence: store custom curve at `etc/sonic/custom-fan/fancontrol` and install `fancontrol-override.service` to restore it into `usr/share/sonic/device/<platform>/fancontrol` and restart `pmon` on every boot. If a `fancontrol.service` is provided on the flashdrive, it is also installed and enabled.
 - Cutover UX: prompt to set next boot (`sonic-installer set-next-boot <image>`) and optionally reboot now.
 
+### Architecture Evolution
+
+**Original Design (alpha):** Multiple bash scripts with duplicated logic
+- `sonic-backup.sh`, `sonic-deploy.sh`, `sonic-offline-customize.sh`, etc.
+- Extensive duplication of helper functions
+- Complex bash-only state management
+
+**Current Design (beta):** Unified hybrid architecture
+- **Single Entry Point**: `sonic-upgrade-helper` for all common workflows
+- **Hybrid Implementation**: Bash for system integration, Python for state management
+- **Clean Abstractions**: State components defined declaratively, source/destination agnostic
+- **Power User Access**: Low-level tools still available (`sonic-overlay.sh`, direct Python access)
+
+**State Management Core**: Python module (`lib/sonic_state.py`)
+- Declarative state component definitions
+- Abstract adapters for sources/destinations (filesystem, backup files)
+- Consistent operations: backup, restore, migrate, validate
+- Proper error handling and validation
+
 ### Validation Approach
 `sonic-offline-validate.sh` performs non-destructive checks:
-- Required binaries present (e.g., `sonic-installer`, `rsync`, `blkid`).
+- Required binaries present (e.g., `sonic-installer`, `blkid`, `tar`, `python3`).
 - SONiC version and platform detection.
 - Newest offline image discovery and `fsroot` resolution.
-- Recentness of the target image.
 - Flashdrive mount and UUID; expected asset presence.
 - Offline root layout (presence of `etc/`, `etc/shadow`, platform dir) and writability probe.
 - Space estimation for copying `/home` (simple headroom check).
 - Admin user presence and `/etc/shadow` readability.
 - Advisory diff between running config and saved `/etc/sonic/config_db.json` (whitespace-insensitive; list order may differ).
 - Presence of `pmon.service` on the current system for expectations.
+
+**Note**: Python state core also performs runtime validation of tool availability and permissions.
 
 ### Edge Cases and Safeguards
 - Missing tools: warnings logged; some steps may be skipped.

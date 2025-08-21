@@ -1,0 +1,596 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# SONiC Upgrade Helper - Consolidated Unified Interface
+# All workflow logic integrated, fake complexity removed
+
+VERSION="0.5.0"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/sonic-common.sh"
+
+usage() {
+    cat <<USAGE
+SONiC Upgrade Helper v$VERSION - Unified Interface for SONiC Image Management
+
+COMMON WORKFLOWS:
+  sonic-upgrade-helper save --output <backup.tar.gz>
+      Save current system state to backup file
+      
+  sonic-upgrade-helper install <image.bin> [--restore <backup.tar.gz>] [--activate]
+      Install new SONiC image, optionally restore settings and activate
+      
+  sonic-upgrade-helper reinstall [--activate] [--dry-run]
+      Re-customize current image (useful after config changes)
+      
+  sonic-upgrade-helper customize [--image <image-dir>] [--activate] [--dry-run]
+      Customize SONiC image with current system state
+
+POWER USER WORKFLOWS:
+  sonic-upgrade-helper overlay prepare --image <image-dir> [--name <overlay-name>] [--mount]
+      Prepare overlay filesystem for image customization
+      
+  sonic-upgrade-helper overlay activate --image <image-dir> --name <overlay-name>
+      Activate prepared overlay as next boot target
+      
+  sonic-upgrade-helper state backup --output <backup.tar.gz> [--source <root>]
+      Create backup of system state components
+      
+  sonic-upgrade-helper state restore --input <backup.tar.gz> --target <root>
+      Restore system state from backup
+      
+  sonic-upgrade-helper state migrate --source <root> --target <root>
+      Migrate system state between filesystems
+
+DEBUG/TESTING WORKFLOWS:
+  sonic-upgrade-helper validate [--image <image-dir>]
+      Validate system state and tool availability (debug command)
+
+GLOBAL OPTIONS:
+  --dry-run, -n         Show what would be done without making changes
+  --quiet, -q           Minimize output (implies --no-handholding)
+  --version, -v         Show version information
+  --help, -h            Show this help
+
+EXAMPLES:
+  # Save current setup before upgrade
+  sonic-upgrade-helper save --output my-setup.tar.gz
+  
+  # Install new image with current settings  
+  sonic-upgrade-helper install sonic-image-202411.bin --restore my-setup.tar.gz --activate
+  
+  # Re-customize current image after config changes
+  sonic-upgrade-helper reinstall --activate
+  
+  # Customize newest image and activate it
+  sonic-upgrade-helper customize --activate
+  
+  # Debug: validate current system
+  sonic-upgrade-helper validate
+
+For detailed help on specific workflows:
+  sonic-upgrade-helper <workflow> --help
+USAGE
+}
+
+# === SAVE WORKFLOW (consolidated from sonic-backup.sh) ===
+
+workflow_save() {
+    local output="" source_root="/"
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --output) output="$2"; shift ;;
+            --source-root) source_root="$2"; shift ;;
+            -h|--help) 
+                cat <<HELP
+sonic-upgrade-helper save - Save current system state
+
+USAGE:
+  sonic-upgrade-helper save --output <backup.tar.gz> [--source-root <root>]
+
+OPTIONS:
+  --output <file>        Output backup file (required)
+  --source-root <path>   Source root to backup (default: /)
+
+EXAMPLES:
+  sonic-upgrade-helper save --output my-setup.tar.gz
+  sonic-upgrade-helper save --output test-backup.tar.gz --source-root /tmp/test-root
+HELP
+                exit 0 ;;
+            *) die "Unknown option: $1" ;;
+        esac; shift
+    done
+    
+    [[ -n "$output" ]] || die "Missing required --output option"
+    
+    log "Saving system state to $output"
+    local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "backup" "--source" "$source_root" "--output" "$output")
+    [[ ${DRY_RUN:-0} -eq 1 ]] && python_cmd+=(--dry-run)
+    "${python_cmd[@]}" || die "Backup failed"
+    log "Backup completed: $output"
+}
+
+# === INSTALL WORKFLOW (consolidated from sonic-deploy.sh) ===
+
+workflow_install() {
+    local image_bin="" restore_backup="" activate=0
+    local rw_name="" lower="auto" no_brew=0 no_fan=0
+    
+    # First argument should be the image file
+    if [[ $# -gt 0 && ! "$1" =~ ^-- ]]; then
+        image_bin="$1"; shift
+    fi
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --restore) restore_backup="$2"; shift ;;
+            --activate) activate=1 ;;
+            --rw-name) rw_name="$2"; shift ;;
+            --lower) lower="$2"; shift ;;
+            --no-brew) no_brew=1 ;;
+            --no-fancontrol) no_fan=1 ;;
+            -h|--help)
+                cat <<HELP
+sonic-upgrade-helper install - Install SONiC image with optional settings restore
+
+USAGE:
+  sonic-upgrade-helper install <image.bin> [options]
+
+OPTIONS:
+  --restore <backup>     Restore settings from backup after install
+  --activate             Activate the image as next boot target
+  --rw-name <name>       Name for overlay filesystem
+  --lower <mode>         Lower layer mode: auto|fs|dir (default: auto)
+  --no-brew              Skip Homebrew bootstrap service
+  --no-fancontrol        Skip fan control customization
+
+EXAMPLES:
+  sonic-upgrade-helper install sonic-202411.bin
+  sonic-upgrade-helper install sonic-202411.bin --restore my-setup.tar.gz --activate
+HELP
+                exit 0 ;;
+            *) die "Unknown option: $1" ;;
+        esac; shift
+    done
+    
+    [[ -n "$image_bin" ]] || die "Missing required image file argument"
+    [[ -r "$image_bin" ]] || die "Image file not readable: $image_bin"
+    
+    log "Installing SONiC image: $image_bin"
+    
+    # Run sonic-installer
+    local output
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        log "DRY-RUN: sonic-installer install -y $image_bin"
+        output=""
+    else
+        output=$(sonic-installer install -y "$image_bin" 2>&1 | tee /tmp/sonic_install.log || true)
+    fi
+    
+    # Handle same-image vs new-image workflow
+    local image_dir
+    if echo "$output" | grep -qi "already installed"; then
+        log "Image already installed; treating as same-image workflow"
+        image_dir=$(detect_current_image_dir) || die "Unable to detect current image dir"
+        # For same-image, customize and activate
+        customize_image_inline "$image_dir" 1 "$rw_name" "$lower" "$no_brew" "$no_fan" 0
+    else
+        log "New image installed"
+        image_dir=$(detect_newest_image_dir) || die "Unable to detect newly installed image dir"
+        # For new image, just customize (sonic-installer handles boot order)
+        customize_image_inline "$image_dir" 0 "$rw_name" "$lower" "$no_brew" "$no_fan" 0
+        
+        if [[ "$activate" -eq 1 ]]; then
+            local image_name
+            image_name=$(image_dir_to_name "$image_dir")
+            if [[ ${DRY_RUN:-0} -eq 0 ]]; then
+                sonic-installer set-next-boot "$image_name" || log "WARN: Failed to set next boot"
+            else
+                log "DRY-RUN: sonic-installer set-next-boot $image_name"
+            fi
+        fi
+    fi
+    
+    # Handle restore if requested
+    if [[ -n "$restore_backup" ]]; then
+        log "Restoring settings from $restore_backup"
+        local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "restore" "--input" "$restore_backup" "--target" "/newroot")
+        [[ ${DRY_RUN:-0} -eq 1 ]] && python_cmd+=(--dry-run)
+        "${python_cmd[@]}" || die "Restore failed"
+        log "Settings restored successfully"
+    fi
+}
+
+# === REINSTALL WORKFLOW ===
+
+workflow_reinstall() {
+    local activate=0 rw_name="" lower="auto" no_brew=0 no_fan=0
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --activate) activate=1 ;;
+            --rw-name) rw_name="$2"; shift ;;
+            --lower) lower="$2"; shift ;;
+            --no-brew) no_brew=1 ;;
+            --no-fancontrol) no_fan=1 ;;
+            -h|--help)
+                cat <<HELP
+sonic-upgrade-helper reinstall - Re-customize current image
+
+USAGE:
+  sonic-upgrade-helper reinstall [options]
+
+DESCRIPTION:
+  Re-customizes the currently running image with current system state.
+  Useful after making configuration changes that you want to persist
+  across reboots without installing a new image.
+
+OPTIONS:
+  --activate             Activate the customized image as next boot target
+  --rw-name <name>       Name for overlay filesystem
+  --lower <mode>         Lower layer mode: auto|fs|dir (default: auto)
+  --no-brew              Skip Homebrew bootstrap service
+  --no-fancontrol        Skip fan control customization
+
+EXAMPLES:
+  sonic-upgrade-helper reinstall --activate
+  sonic-upgrade-helper reinstall --no-brew --activate
+HELP
+                exit 0 ;;
+            *) die "Unknown option: $1" ;;
+        esac; shift
+    done
+    
+    log "Re-customizing current SONiC image"
+    
+    local image_dir
+    image_dir=$(detect_current_image_dir) || die "Unable to detect current image dir"
+    
+    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan" 0
+}
+
+# === CUSTOMIZE WORKFLOW ===
+
+workflow_customize() {
+    local image_dir="" activate=0 rw_name="" lower="auto"
+    local no_brew=0 no_fan=0
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --image) image_dir="$2"; shift ;;
+            --activate) activate=1 ;;
+            --rw-name) rw_name="$2"; shift ;;
+            --lower) lower="$2"; shift ;;
+            --no-brew) no_brew=1 ;;
+            --no-fancontrol) no_fan=1 ;;
+            -h|--help)
+                cat <<HELP
+sonic-upgrade-helper customize - Customize SONiC image with current system state
+
+USAGE:
+  sonic-upgrade-helper customize [options]
+
+OPTIONS:
+  --image <dir>          Image directory to customize (default: newest)
+  --activate             Activate customized image as next boot target
+  --rw-name <name>       Name for overlay filesystem
+  --lower <mode>         Lower layer mode: auto|fs|dir (default: auto)
+  --no-brew              Skip Homebrew bootstrap service
+  --no-fancontrol        Skip fan control customization
+
+EXAMPLES:
+  sonic-upgrade-helper customize --activate
+  sonic-upgrade-helper customize --image /host/image-sonic-202411 --activate
+HELP
+                exit 0 ;;
+            *) die "Unknown option: $1" ;;
+        esac; shift
+    done
+    
+    local explicit_image=0
+    [[ -n "$image_dir" ]] && explicit_image=1
+    
+    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan" "$explicit_image"
+}
+
+# === CONSOLIDATED CUSTOMIZE LOGIC (from sonic-offline-customize.sh) ===
+
+customize_image_inline() {
+    local image_dir="$1" activate="$2" rw_name="$3" lower="$4" no_brew="$5" no_fan="$6" explicit_image="$7"
+    
+    # Auto-detect image directory if not specified
+    if [[ -z "$image_dir" ]]; then
+        image_dir=$(detect_newest_image_dir) || die "No image directory found under /host/image-*"
+    fi
+    [[ -d "$image_dir" ]] || die "Image directory not found: $image_dir"
+    
+    # Generate RW name if not provided
+    if [[ -z "$rw_name" ]]; then
+        rw_name="custom-$(date +%Y%m%d-%H%M%S)"
+    fi
+    
+    log "Customizing image: $image_dir"
+    log "Using overlay name: $rw_name"
+    
+    # Simplified image age check (only for explicitly specified images)
+    check_explicit_image_age "$image_dir" "$explicit_image"
+    
+    # Detect platform for fancontrol
+    local platform
+    platform=$(detect_platform) || die "Failed to detect platform"
+    log "Detected platform: $platform"
+    
+    # Prepare overlay
+    log "Preparing overlay filesystem..."
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        log "DRY-RUN: sonic-overlay.sh prepare --image-dir $image_dir --lower $lower --rw-name $rw_name --mount"
+    else
+        "$SCRIPT_DIR/sonic-overlay.sh" prepare --image-dir "$image_dir" --lower "$lower" --rw-name "$rw_name" --mount || die "Failed to prepare overlay"
+    fi
+    
+    local offline_root="/newroot"
+    
+    # Check if already customized (idempotency)
+    if check_already_customized "$offline_root"; then
+        log "Image appears already customized with this version. Skipping state migration."
+    else
+        # Migrate system state using Python core
+        log "Migrating system state to offline root..."
+        local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "migrate" "--source" "/" "--target" "$offline_root")
+        [[ ${DRY_RUN:-0} -eq 1 ]] && python_cmd+=(--dry-run)
+        "${python_cmd[@]}" || die "System state migration failed"
+        log "System state migration completed successfully"
+        
+        # Mark customization complete
+        mark_customization_complete "$offline_root"
+    fi
+    
+    # Additional customizations using common library functions
+    update_fstab_for_flashdrive "$offline_root"
+    
+    if [[ "$no_brew" -eq 0 ]]; then
+        install_brew_first_boot_service_to_root "$offline_root"
+        log "Installed Homebrew bootstrap service"
+    else
+        log "Skipping Homebrew bootstrap (--no-brew specified)"
+    fi
+    
+    if [[ "$no_fan" -eq 0 ]]; then
+        install_fancontrol_assets_to_root "$offline_root" "$platform"
+        log "Installed fancontrol customizations"
+    else
+        log "Skipping fancontrol customization (--no-fancontrol specified)"
+    fi
+    
+    # Handle activation
+    if [[ "$activate" -eq 1 ]]; then
+        log "Activating overlay..."
+        if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+            log "DRY-RUN: sonic-overlay.sh activate --image-dir $image_dir --rw-name $rw_name"
+        else
+            "$SCRIPT_DIR/sonic-overlay.sh" activate --image-dir "$image_dir" --rw-name "$rw_name" || die "Failed to activate overlay"
+        fi
+        
+        local image_name
+        image_name=$(image_dir_to_name "$image_dir")
+        
+        # User interaction for next boot (only if not quiet and not dry-run)
+        if [[ ${NO_HANDHOLDING:-0} -eq 0 && ${DRY_RUN:-0} -eq 0 ]]; then
+            prompt_set_next_boot "$image_name"
+            prompt_reboot
+        else
+            log "Reminder: To switch on next reboot: sonic-installer set-next-boot '$image_name'"
+        fi
+    else
+        local image_name
+        image_name=$(image_dir_to_name "$image_dir")
+        log "Customization complete. To activate: sonic-upgrade-helper overlay activate --image '$image_dir' --name '$rw_name'"
+        log "Then set next boot: sonic-installer set-next-boot '$image_name'"
+    fi
+}
+
+# Simplified image age check (no more complex thresholds and prompts)
+check_explicit_image_age() {
+    local dir="$1" explicit="$2"
+    
+    # Only warn if user explicitly chose an image (not auto-detected)
+    if [[ "$explicit" == "1" ]]; then
+        local age_days=$(( ($(date +%s) - $(stat -c %Y "$dir" 2>/dev/null || echo $(date +%s))) / 86400 ))
+        if [[ $age_days -gt 7 ]]; then
+            log "WARN: Specified image is $age_days days old. Continuing..."
+        fi
+    fi
+}
+
+# Idempotency check (real business logic from design notes)
+check_already_customized() {
+    local offline_root="$1"
+    local marker="$offline_root/var/log/sonic-offline-customize.log"
+    [[ -f "$marker" ]] && grep -q "CUSTOMIZATION_COMPLETED.*$SONIC_SCRIPTS_VERSION" "$marker" 2>/dev/null
+}
+
+# Mark customization complete
+mark_customization_complete() {
+    local offline_root="$1"
+    local logfile="$offline_root/var/log/sonic-offline-customize.log"
+    ensure_dir "$(dirname "$logfile")"
+    if [[ ${DRY_RUN:-0} -eq 1 ]]; then
+        log "DRY-RUN: would mark CUSTOMIZATION_COMPLETED in $logfile"
+    else
+        echo "CUSTOMIZATION_COMPLETED $SONIC_SCRIPTS_VERSION $(date -Is)" >> "$logfile"
+        log "Marked customization complete"
+    fi
+}
+
+# User interaction helpers (real UX requirements from design notes)
+prompt_set_next_boot() {
+    local image_name="$1"
+    read -r -p "Set next boot to '$image_name'? [y/N]: " ans || true
+    case "${ans,,}" in
+        y|yes)
+            if sonic-installer set-next-boot "$image_name"; then
+                log "Set next boot to $image_name"
+            else
+                log "WARN: Failed to set next boot. You can run: sonic-installer set-next-boot '$image_name'"
+            fi ;;
+        *) log "Reminder: To switch on next reboot: sonic-installer set-next-boot '$image_name'" ;;
+    esac
+}
+
+prompt_reboot() {
+    read -r -p "Reboot now to cut over? [y/N]: " ans || true
+    case "${ans,,}" in
+        y|yes)
+            log "Rebooting..."
+            sleep 1
+            reboot ;;
+        *) log "Not rebooting. Changes will take effect on next boot." ;;
+    esac
+}
+
+# === POWER USER WORKFLOWS ===
+
+workflow_validate() {
+    local image_dir="" source_root="/"
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --image) image_dir="$2"; shift ;;
+            --source) source_root="$2"; shift ;;
+            -h|--help)
+                cat <<HELP
+sonic-upgrade-helper validate - Validate SONiC system or image (debug command)
+
+USAGE:
+  sonic-upgrade-helper validate [options]
+
+OPTIONS:
+  --image <dir>          Validate specific image directory
+  --source <root>        Source root to validate (default: /)
+
+EXAMPLES:
+  sonic-upgrade-helper validate                                    # Validate current system
+  sonic-upgrade-helper validate --image /host/image-sonic-202411  # Validate specific image
+HELP
+                exit 0 ;;
+            *) die "Unknown option: $1" ;;
+        esac; shift
+    done
+    
+    if [[ -n "$image_dir" ]]; then
+        log "Validating image: $image_dir"
+        [[ -d "$image_dir" ]] || die "Image directory not found: $image_dir"
+    fi
+    
+    log "Validating system state in: $source_root"
+    python3 "$SCRIPT_DIR/lib/sonic_state.py" validate --source "$source_root" ${DRY_RUN:+--dry-run}
+}
+
+workflow_overlay() {
+    local subcmd="${1:-}"; shift || true
+    case "$subcmd" in
+        prepare|activate|unmount)
+            "$SCRIPT_DIR/sonic-overlay.sh" "$subcmd" "$@"
+            ;;
+        -h|--help|"")
+            cat <<HELP
+sonic-upgrade-helper overlay - Manual overlay management (power users)
+
+USAGE:
+  sonic-upgrade-helper overlay <command> [options]
+
+COMMANDS:
+  prepare    Prepare overlay filesystem
+  activate   Activate prepared overlay
+  unmount    Unmount overlay
+
+For detailed help: sonic-upgrade-helper overlay <command> --help
+Or use the original tool directly: sonic-overlay.sh
+HELP
+            exit 0 ;;
+        *) die "Unknown overlay command: $subcmd" ;;
+    esac
+}
+
+workflow_state() {
+    local subcmd="${1:-}"; shift || true
+    case "$subcmd" in
+        backup|restore|migrate|validate)
+            python3 "$SCRIPT_DIR/lib/sonic_state.py" "$subcmd" "$@" ${DRY_RUN:+--dry-run}
+            ;;
+        -h|--help|"")
+            cat <<HELP
+sonic-upgrade-helper state - Direct state management operations (power users)
+
+USAGE:
+  sonic-upgrade-helper state <command> [options]
+
+COMMANDS:
+  backup     Create state backup
+  restore    Restore state from backup  
+  migrate    Migrate state between filesystems
+  validate   Validate state components
+
+For detailed help: sonic-upgrade-helper state <command> --help
+Or use the Python tool directly: python3 lib/sonic_state.py
+HELP
+            exit 0 ;;
+        *) die "Unknown state command: $subcmd" ;;
+    esac
+}
+
+# === MAIN ENTRY POINT ===
+
+main() {
+    # Parse global options first (before root check for help)
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --dry-run|-n) export DRY_RUN=1; shift ;;
+            --quiet|-q) export NO_HANDHOLDING=1; shift ;;
+            --version|-v) echo "SONiC Upgrade Helper v$VERSION"; exit 0 ;;
+            -h|--help) usage; exit 0 ;;
+            -*) die "Unknown global option: $1" ;;
+            *) break ;;  # Not a global option, must be workflow
+        esac
+    done
+    
+    local workflow="${1:-}"; shift || true
+    
+    # Check for help before requiring root
+    if [[ "$workflow" == "" || "$workflow" == "-h" || "$workflow" == "--help" ]]; then
+        usage; exit 0
+    fi
+    
+    # Also allow help for subcommands without root
+    if [[ $# -gt 0 && ("$1" == "-h" || "$1" == "--help") ]]; then
+        case "$workflow" in
+            save) workflow_save "$@"; exit 0 ;;
+            install) workflow_install "$@"; exit 0 ;;
+            reinstall) workflow_reinstall "$@"; exit 0 ;;
+            customize) workflow_customize "$@"; exit 0 ;;
+            validate) workflow_validate "$@"; exit 0 ;;
+            overlay) workflow_overlay "$@"; exit 0 ;;
+            state) workflow_state "$@"; exit 0 ;;
+        esac
+    fi
+    
+    # Now require root for actual operations
+    need_root
+    
+    case "$workflow" in
+        save) workflow_save "$@" ;;
+        install) workflow_install "$@" ;;
+        reinstall) workflow_reinstall "$@" ;;
+        customize) workflow_customize "$@" ;;
+        validate) workflow_validate "$@" ;;
+        overlay) workflow_overlay "$@" ;;
+        state) workflow_state "$@" ;;
+        -h|--help|"") usage; exit 0 ;;
+        *) die "Unknown workflow: $workflow. Use 'sonic-upgrade-helper --help' for available workflows." ;;
+    esac
+}
+
+main "$@"

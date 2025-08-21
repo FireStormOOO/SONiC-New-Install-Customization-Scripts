@@ -9,13 +9,18 @@ RECENT_THRESHOLD_SECONDS=$((4 * 3600))
 WARN_THRESHOLD_SECONDS=$((72 * 3600))
 FLASH_MOUNT="/media/flashdrive"
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "$SCRIPT_DIR/lib/sonic-common.sh" ]]; then
+	# shellcheck disable=SC1091
+	. "$SCRIPT_DIR/lib/sonic-common.sh"
+fi
+
 required_binaries=(
 	sonic-installer
 	stat
 	awk
 	sed
 	date
-	rsync
 	blkid
 	findmnt
 	df
@@ -85,25 +90,11 @@ detect_sonic_version() {
 	fi
 }
 
-detect_newest_image() {
-	local newest="" mtime=0 path
-	for path in /host/image-*; do
-		[[ -d "$path" ]] || continue
-		local t
-		if [[ -d "$path/fsroot" ]]; then
-			t=$(stat -c %Y "$path/fsroot" 2>/dev/null || echo 0)
-		else
-			t=$(stat -c %Y "$path" 2>/dev/null || echo 0)
-		fi
-		if [[ "$t" -gt "$mtime" ]]; then mtime=$t; newest=$path; fi
-	done
-	[[ -n "$newest" ]] || return 1
-	echo "$newest"
-}
+detect_newest_image() { detect_newest_image_dir; }
 
 resolve_offline_root() {
 	local dir="$1"
-	if [[ -d "$dir/fsroot" ]]; then echo "$dir/fsroot"; else echo "$dir"; fi
+	if [[ -d "$dir/rw" ]]; then echo "$dir/rw"; elif [[ -d "$dir/fsroot" ]]; then echo "$dir/fsroot"; else echo "$dir"; fi
 }
 
 check_recent_install() {
@@ -171,10 +162,19 @@ check_users_shadow() {
 
 check_offline_layout() {
 	local offline_root="$1" platform="$2"
-	[[ -d "$offline_root/etc" ]] && pass "Offline etc/ exists" || fail "Offline etc/ missing"
-	[[ -f "$offline_root/etc/sonic/config_db.json" ]] && log "Offline has a stock config_db.json" || log "Offline config_db.json not found (will be copied)"
-	[[ -f "$offline_root/etc/shadow" ]] && pass "Offline /etc/shadow present" || warn "Offline /etc/shadow missing"
-	[[ -d "$offline_root/usr/share/sonic/device/$platform" ]] && pass "Platform dir exists in offline image" || warn "Platform dir missing in offline image"
+	if mountpoint -q /newroot; then
+		[[ -d "$offline_root/etc" ]] && pass "Overlay etc/ exists" || fail "Overlay etc/ missing"
+		[[ -f "$offline_root/etc/sonic/config_db.json" ]] && log "Overlay has config_db.json" || log "Overlay config_db.json not found (will be copied)"
+		[[ -f "$offline_root/etc/shadow" ]] && pass "Overlay /etc/shadow present" || warn "Overlay /etc/shadow missing"
+		[[ -d "$offline_root/usr/share/sonic/device/$platform" ]] && pass "Platform dir exists in overlay" || warn "Platform dir missing in overlay"
+	else
+		if [[ -d "$offline_root/etc" ]]; then
+			pass "Image etc/ exists"
+		else
+			warn "Image etc/ missing (expected for squashfs without fsroot). Prepare overlay to get a writable root at /newroot."
+		fi
+		[[ -d "$offline_root/usr/share/sonic/device/$platform" ]] && pass "Platform dir exists in image" || warn "Platform dir missing in image"
+	fi
 }
 
 check_space_for_home_copy() {
@@ -249,4 +249,3 @@ main() {
 }
 
 main "$@"
-

@@ -4,7 +4,10 @@ set -euo pipefail
 
 # SONiC overlay manager: prepare /newroot against chosen lower, apply changes, activate
 
-SCRIPT_VERSION="2025.08.20-1"
+# source common helpers (required)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/sonic-common.sh"
 
 usage() {
     cat <<USAGE
@@ -18,11 +21,6 @@ Notes:
   - activate: live-rename rw/work to rw-old-<ts>, and rw-next-<name> to rw; retains N old sets
 USAGE
 }
-
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
-die() { log "ERROR: $*"; exit 1; }
-
-need_root() { [[ ${EUID} -eq 0 ]] || die "Must run as root"; }
 
 resolve_lower() {
     local image_dir="$1" mode="$2"
@@ -52,18 +50,17 @@ prepare() {
     [[ -n "$rw_name" ]] || rw_name="$stamp"
     local rw_next="$image_dir/rw-next-$rw_name"
     local work_next="$image_dir/work-next-$rw_name"
-    mkdir -p "$rw_next/upper" "$work_next"
+    dry mkdir -p "$rw_next/upper" "$work_next"
 
     if [[ "$do_mount" == "1" ]]; then
-        mkdir -p /mnt/newroot.lower /newroot
+        dry mkdir -p /mnt/newroot.lower /newroot
         local lower_dir="$lower"
         if [[ -f "$lower" ]]; then
             # mount squashfs
-            mountpoint -q /mnt/newroot.lower || mount -t squashfs -o ro "$lower" /mnt/newroot.lower
+            if ! mountpoint -q /mnt/newroot.lower; then dry mount -t squashfs -o ro "$lower" /mnt/newroot.lower; fi
             lower_dir="/mnt/newroot.lower"
         fi
-        mountpoint -q /newroot || mount -t overlay overlay \
-            -o lowerdir="$lower_dir",upperdir="$rw_next/upper",workdir="$work_next" /newroot
+        if ! mountpoint -q /newroot; then dry mount -t overlay overlay -o lowerdir="$lower_dir",upperdir="$rw_next/upper",workdir="$work_next" /newroot; fi
         log "Mounted overlay at /newroot (lower=$lower_dir upper=$rw_next/upper work=$work_next)"
     else
         log "Prepared upper/work: $rw_next/upper and $work_next (not mounted)"
@@ -72,10 +69,10 @@ prepare() {
 
 unmount_newroot() {
     if mountpoint -q /newroot; then
-        umount /newroot || die "Failed to unmount /newroot"
+        dry umount /newroot || die "Failed to unmount /newroot"
     fi
     if mountpoint -q /mnt/newroot.lower; then
-        umount /mnt/newroot.lower || true
+        dry umount /mnt/newroot.lower || true
     fi
 }
 
@@ -92,19 +89,19 @@ activate() {
 
     local ts
     ts=$(date +%Y%m%d-%H%M%S)
-    if [[ -d "$rw_cur" ]]; then mv "$rw_cur" "$image_dir/rw-old-$ts"; fi
-    if [[ -d "$work_cur" ]]; then mv "$work_cur" "$image_dir/work-old-$ts"; fi
-    mv "$rw_next" "$rw_cur"
-    mv "$work_next" "$work_cur"
+    if [[ -d "$rw_cur" ]]; then dry mv "$rw_cur" "$image_dir/rw-old-$ts"; fi
+    if [[ -d "$work_cur" ]]; then dry mv "$work_cur" "$image_dir/work-old-$ts"; fi
+    dry mv "$rw_next" "$rw_cur"
+    dry mv "$work_next" "$work_cur"
     log "Activated new overlay (rw/work swapped). Previous saved with -old-$ts"
 
     # Retention
     retain=${retain:-2}
     local olds
     mapfile -t olds < <(ls -1dt "$image_dir"/rw-old-* 2>/dev/null | tail -n +$((retain+1)) || true)
-    for d in "${olds[@]:-}"; do [[ -n "$d" ]] && rm -rf "$d"; done
+    for d in "${olds[@]:-}"; do [[ -n "$d" ]] && dry rm -rf "$d"; done
     mapfile -t olds < <(ls -1dt "$image_dir"/work-old-* 2>/dev/null | tail -n +$((retain+1)) || true)
-    for d in "${olds[@]:-}"; do [[ -n "$d" ]] && rm -rf "$d"; done
+    for d in "${olds[@]:-}"; do [[ -n "$d" ]] && dry rm -rf "$d"; done
 }
 
 main() {
