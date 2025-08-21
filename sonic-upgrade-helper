@@ -13,36 +13,40 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
     cat <<USAGE
-SONiC Unified Interface
+SONiC Upgrade Helper - Unified Interface for SONiC Image Management
 
 COMMON WORKFLOWS:
-  sonic save --output <backup.tar.gz>
+  sonic-upgrade-helper save --output <backup.tar.gz>
       Save current system state to backup file
       
-  sonic install <image.bin> [--restore <backup.tar.gz>] [--activate]
+  sonic-upgrade-helper install <image.bin> [--restore <backup.tar.gz>] [--activate]
       Install new SONiC image, optionally restore settings and activate
       
-  sonic customize [--image <image-dir>] [--activate] [--dry-run]
-      Customize SONiC image with current system state
+  sonic-upgrade-helper reinstall [--activate] [--dry-run]
+      Re-customize current image (useful after config changes)
       
-  sonic validate [--image <image-dir>]
-      Validate SONiC image or current system
+  sonic-upgrade-helper customize [--image <image-dir>] [--activate] [--dry-run]
+      Customize SONiC image with current system state
 
 POWER USER WORKFLOWS:
-  sonic overlay prepare --image <image-dir> [--name <overlay-name>] [--mount]
+  sonic-upgrade-helper overlay prepare --image <image-dir> [--name <overlay-name>] [--mount]
       Prepare overlay filesystem for image customization
       
-  sonic overlay activate --image <image-dir> --name <overlay-name>
+  sonic-upgrade-helper overlay activate --image <image-dir> --name <overlay-name>
       Activate prepared overlay as next boot target
       
-  sonic state backup --output <backup.tar.gz> [--source <root>]
+  sonic-upgrade-helper state backup --output <backup.tar.gz> [--source <root>]
       Create backup of system state components
       
-  sonic state restore --input <backup.tar.gz> --target <root>
+  sonic-upgrade-helper state restore --input <backup.tar.gz> --target <root>
       Restore system state from backup
       
-  sonic state migrate --source <root> --target <root>
+  sonic-upgrade-helper state migrate --source <root> --target <root>
       Migrate system state between filesystems
+
+DEBUG/TESTING WORKFLOWS:
+  sonic-upgrade-helper validate [--image <image-dir>]
+      Validate system state and tool availability (debug command)
 
 GLOBAL OPTIONS:
   --dry-run, -n         Show what would be done without making changes
@@ -51,19 +55,22 @@ GLOBAL OPTIONS:
 
 EXAMPLES:
   # Save current setup before upgrade
-  sonic save --output my-setup.tar.gz
+  sonic-upgrade-helper save --output my-setup.tar.gz
   
-  # Install new image with current settings
-  sonic install sonic-image-202411.bin --restore my-setup.tar.gz --activate
+  # Install new image with current settings  
+  sonic-upgrade-helper install sonic-image-202411.bin --restore my-setup.tar.gz --activate
+  
+  # Re-customize current image after config changes
+  sonic-upgrade-helper reinstall --activate
   
   # Customize newest image and activate it
-  sonic customize --activate
+  sonic-upgrade-helper customize --activate
   
-  # Validate current system
-  sonic validate
+  # Debug: validate current system
+  sonic-upgrade-helper validate
 
 For detailed help on specific workflows:
-  sonic <workflow> --help
+  sonic-upgrade-helper <workflow> --help
 USAGE
 }
 
@@ -99,6 +106,58 @@ HELP
     
     log "Saving system state to $output"
     "$SCRIPT_DIR/sonic-backup.sh" backup --output "$output" --source-root "$source_root"
+}
+
+workflow_reinstall() {
+    local activate=0 rw_name="" lower="auto" no_brew=0 no_fan=0
+    
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --activate) activate=1 ;;
+            --rw-name) rw_name="$2"; shift ;;
+            --lower) lower="$2"; shift ;;
+            --no-brew) no_brew=1 ;;
+            --no-fancontrol) no_fan=1 ;;
+            -h|--help)
+                cat <<HELP
+sonic-upgrade-helper reinstall - Re-customize current image
+
+USAGE:
+  sonic-upgrade-helper reinstall [options]
+
+DESCRIPTION:
+  Re-customizes the currently running image with current system state.
+  Useful after making configuration changes that you want to persist
+  across reboots without installing a new image.
+
+OPTIONS:
+  --activate             Activate the customized image as next boot target
+  --rw-name <name>       Name for overlay filesystem
+  --lower <mode>         Lower layer mode: auto|fs|dir (default: auto)
+  --no-brew              Skip Homebrew bootstrap service
+  --no-fancontrol        Skip fan control customization
+
+EXAMPLES:
+  sonic-upgrade-helper reinstall --activate
+  sonic-upgrade-helper reinstall --no-brew --activate
+HELP
+                exit 0 ;;
+            *) die "Unknown option: $1" ;;
+        esac; shift
+    done
+    
+    log "Re-customizing current SONiC image"
+    
+    # Build deploy reinstall command
+    local deploy_args=("$SCRIPT_DIR/sonic-deploy.sh" "reinstall")
+    [[ -n "$rw_name" ]] && deploy_args+=(--rw-name "$rw_name")
+    deploy_args+=(--lower "$lower")
+    [[ "$no_brew" -eq 1 ]] && deploy_args+=(--no-brew)
+    [[ "$no_fan" -eq 1 ]] && deploy_args+=(--no-fancontrol)
+    [[ ${DRY_RUN:-0} -eq 1 ]] && deploy_args+=(--dry-run)
+    [[ ${NO_HANDHOLDING:-0} -eq 1 ]] && deploy_args+=(--no-handholding)
+    
+    "${deploy_args[@]}"
 }
 
 workflow_install() {
@@ -338,6 +397,7 @@ main() {
         case "$workflow" in
             save) workflow_save "$@"; exit 0 ;;
             install) workflow_install "$@"; exit 0 ;;
+            reinstall) workflow_reinstall "$@"; exit 0 ;;
             customize) workflow_customize "$@"; exit 0 ;;
             validate) workflow_validate "$@"; exit 0 ;;
             overlay) workflow_overlay "$@"; exit 0 ;;
@@ -351,12 +411,13 @@ main() {
     case "$workflow" in
         save) workflow_save "$@" ;;
         install) workflow_install "$@" ;;
+        reinstall) workflow_reinstall "$@" ;;
         customize) workflow_customize "$@" ;;
         validate) workflow_validate "$@" ;;
         overlay) workflow_overlay "$@" ;;
         state) workflow_state "$@" ;;
         -h|--help|"") usage; exit 0 ;;
-        *) die "Unknown workflow: $workflow. Use 'sonic --help' for available workflows." ;;
+        *) die "Unknown workflow: $workflow. Use 'sonic-upgrade-helper --help' for available workflows." ;;
     esac
 }
 

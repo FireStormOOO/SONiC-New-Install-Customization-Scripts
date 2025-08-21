@@ -243,11 +243,17 @@ class StateManager:
             if os.geteuid() != 0:
                 raise PermissionError("State management operations require root privileges")
         
-        # Check for required tools
-        required_tools = ['tar', 'date', 'hostname']
+        # Check for required tools (SONiC-compatible)
+        required_tools = ['tar', 'date', 'hostname', 'blkid', 'findmnt', 'stat', 'awk', 'sed', 'grep']
+        optional_tools = ['curl']  # For brew bootstrap
+        
         for tool in required_tools:
             if not shutil.which(tool):
                 raise RuntimeError(f"Required tool '{tool}' not found in PATH")
+        
+        for tool in optional_tools:
+            if not shutil.which(tool):
+                logger.warning(f"Optional tool '{tool}' not found - some features may be disabled")
     
     def _handle_special_component(self, component: StateComponent, source: StateAdapter, dest: StateAdapter):
         """Handle components with special processing requirements"""
