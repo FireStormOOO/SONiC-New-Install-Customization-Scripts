@@ -15,7 +15,6 @@ required_binaries=(
 	awk
 	sed
 	date
-	rsync
 	blkid
 	findmnt
 	df

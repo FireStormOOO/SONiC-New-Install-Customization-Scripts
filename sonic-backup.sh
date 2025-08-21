@@ -59,9 +59,7 @@ create_backup() {
     fi
     if [[ -d "$source_root/home" ]]; then
         mkdir -p "$work/data/home"
-        rsync -aHAX --numeric-ids --delete-excluded \
-            --exclude '*/.cache/*' --exclude '*/.local/share/Trash/*' \
-            "$source_root/home/" "$work/data/home/" || cp -a "$source_root/home/." "$work/data/home/" || true
+        ( cd "$source_root/home" && tar -cpf - . ) | ( cd "$work/data/home" && tar --numeric-owner -xpf - )
     fi
     if [[ -f "$source_root/etc/ssh/sshd_config" ]]; then
         mkdir -p "$work/data/etc/ssh"
@@ -122,7 +120,7 @@ restore_backup() {
     fi
     if [[ -d "$work/data/home" ]]; then
         mkdir -p "$target_root/home"
-        rsync -aHAX --numeric-ids "$work/data/home/" "$target_root/home/" || cp -a "$work/data/home/." "$target_root/home/"
+        ( cd "$work/data/home" && tar -cpf - . ) | ( cd "$target_root/home" && tar --numeric-owner -xpf - )
     fi
     if [[ -d "$work/data/etc/ssh" ]]; then
         mkdir -p "$target_root/etc/ssh"
@@ -176,4 +174,3 @@ main() {
 }
 
 main "$@"
-

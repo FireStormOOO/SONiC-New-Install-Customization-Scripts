@@ -314,7 +314,14 @@ main() {
     log "Detected platform: $platform"
 
     copy_config_db "$offline_root"
-    copy_homes "$offline_root"
+    # Copy home directories using tar (stock SONiC lacks rsync)
+    ensure_dir "$offline_root/home"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+        log "DRY-RUN: tar -C /home -cpf - . | tar -C $offline_root/home --numeric-owner -xpf -"
+    else
+        ( cd /home && tar -cpf - . ) | ( cd "$offline_root/home" && tar --numeric-owner -xpf - )
+    fi
+    log "Copied /home"
     copy_ssh_settings_and_keys "$offline_root"
     copy_admin_password_hash "$offline_root"
     update_fstab_for_flashdrive "$offline_root"
