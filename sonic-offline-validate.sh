@@ -9,6 +9,12 @@ RECENT_THRESHOLD_SECONDS=$((4 * 3600))
 WARN_THRESHOLD_SECONDS=$((72 * 3600))
 FLASH_MOUNT="/media/flashdrive"
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "$SCRIPT_DIR/lib/sonic-common.sh" ]]; then
+	# shellcheck disable=SC1091
+	. "$SCRIPT_DIR/lib/sonic-common.sh"
+fi
+
 required_binaries=(
 	sonic-installer
 	stat
@@ -84,21 +90,7 @@ detect_sonic_version() {
 	fi
 }
 
-detect_newest_image() {
-	local newest="" mtime=0 path
-	for path in /host/image-*; do
-		[[ -d "$path" ]] || continue
-		local t
-		if [[ -d "$path/fsroot" ]]; then
-			t=$(stat -c %Y "$path/fsroot" 2>/dev/null || echo 0)
-		else
-			t=$(stat -c %Y "$path" 2>/dev/null || echo 0)
-		fi
-		if [[ "$t" -gt "$mtime" ]]; then mtime=$t; newest=$path; fi
-	done
-	[[ -n "$newest" ]] || return 1
-	echo "$newest"
-}
+detect_newest_image() { detect_newest_image_dir; }
 
 resolve_offline_root() {
 	local dir="$1"
