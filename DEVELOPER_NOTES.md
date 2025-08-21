@@ -72,8 +72,67 @@
 - Fail-fast when `/newroot` isn’t mounted after prepare, or when required paths are missing, with a consistent hint to run overlay prepare.
 - Dry-run echoes all file operations and overlay actions.
 
-### Future improvements
-- Orchestrator wrapper (e.g., `sonic-deploy.sh`) to chain: validate → (optional) sonic-installer install → overlay prepare → (optional) backup/restore → customize → (optional) activate → set-next-boot → reboot.
-- Read target image name reliably by inspecting `sonic-installer` logic or metadata to decide “same image” vs “different image” automatically.
-- Unified logging and a consistent artifact directory on the flashdrive.
+### Development Practices
+
+**Git Workflow:**
+
+Commit Message Format - Follow [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/):
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+Common Types:
+- `feat`: New feature (MINOR version bump)
+- `fix`: Bug fix (PATCH version bump) 
+- `feat!` or `fix!`: Breaking change (MAJOR version bump)
+- `refactor`: Code refactoring without functional changes
+- `docs`: Documentation changes
+- `test`: Adding or updating tests
+
+Breaking Changes Example:
+```
+feat!: add new state component handling
+
+BREAKING CHANGE: Modified state component interface. Migration: update component definitions to use new format.
+```
+
+**Merge Strategy**: Squash merges preferred
+- Keeps clean linear history
+- Single commit per feature/fix
+- Use conventional commit format for squash merge message
+
+**Semantic Versioning**: `MAJOR.MINOR.PATCH`
+- **MAJOR**: Breaking changes (API changes, removed functionality)
+- **MINOR**: New features (backward compatible)  
+- **PATCH**: Bug fixes (backward compatible)
+
+**Code Standards:**
+
+Bash:
+- Use `set -euo pipefail` at top of all scripts
+- Source `lib/sonic-common.sh` for shared functions
+- Use `dry` helpers for DRY-RUN support
+- Validate arguments early with clear error messages
+
+Python:
+- Follow PEP 8 style guidelines
+- Use type hints for function signatures
+- Implement proper exception handling
+- Add docstrings for classes and methods
+
+**Testing Workflow:**
+- Test with `--dry-run` first
+- Validate with `sonic-upgrade-helper validate`
+- Verify Python module: `python3 -m py_compile lib/sonic_state.py`
+- Run environment validation: `sudo sonic-offline-validate.sh`
+
+### Future Improvements
+- Enhanced validation and integrity checking
+- Incremental backup support
+- State component versioning for schema changes
+- Comprehensive automated test suite
 
