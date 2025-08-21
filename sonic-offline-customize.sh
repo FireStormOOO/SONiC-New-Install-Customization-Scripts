@@ -412,12 +412,23 @@ main() {
     fi
     log "Detected platform: $platform"
 
-    copy_config_db_to_root "$offline_root"
-    log "Copied config_db.json"
-    copy_homes "$offline_root"
-    copy_ssh_settings_and_keys "$offline_root"
-    migrate_password_hash_to_root "$offline_root" "admin"
-    log "Migrated admin password hash"
+    # Migrate system state using Python core
+    log "Migrating system state to offline root..."
+    local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "migrate" "--source" "/" "--target" "$offline_root")
+    [[ "$DRY_RUN" -eq 1 ]] && python_cmd+=(--dry-run)
+    
+    if "${python_cmd[@]}"; then
+        log "System state migration completed successfully"
+    else
+        log "WARN: Python state migration failed, falling back to legacy methods"
+        # Fallback to old methods for compatibility
+        copy_config_db_to_root "$offline_root"
+        log "Copied config_db.json"
+        copy_homes "$offline_root"
+        copy_ssh_settings_and_keys "$offline_root"
+        migrate_password_hash_to_root "$offline_root" "admin"
+        log "Migrated admin password hash (legacy mode)"
+    fi
     update_fstab_for_flashdrive "$offline_root"
     if [[ "$DISABLE_BREW" -eq 0 ]]; then
         install_brew_first_boot_service_to_root "$offline_root"
