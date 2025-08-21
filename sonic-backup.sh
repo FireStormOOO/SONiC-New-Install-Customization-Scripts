@@ -33,73 +33,15 @@ create_backup() {
     [[ -n "$out" ]] || die "--output is required"
     [[ -d "$source_root" ]] || die "--source-root not a directory"
 
-    local work
-    work=$(mktemp -d)
-    trap 'rm -rf "$work"' EXIT
-
-    local platform
-    platform=$(detect_platform)
-
-    mkdir -p "$work/data" "$work/meta"
-
-    # Collect files
-    if [[ -f "$source_root/etc/sonic/config_db.json" ]]; then
-        mkdir -p "$work/data/etc/sonic"
-        dry cp -a "$source_root/etc/sonic/config_db.json" "$work/data/etc/sonic/" || true
+    # Use Python state management core
+    local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "backup" "--source" "$source_root" "--output" "$out")
+    [[ ${DRY_RUN:-0} -eq 1 ]] && python_cmd+=(--dry-run)
+    
+    if "${python_cmd[@]}"; then
+        log "Backup completed: $out"
+    else
+        die "Backup failed"
     fi
-    if [[ -d "$source_root/home" ]]; then
-        mkdir -p "$work/data/home"
-        if declare -F copy_dir_tar >/dev/null 2>&1; then
-            copy_dir_tar "$source_root/home" "$work/data/home"
-        else
-            drysh "( cd \"$source_root/home\" && tar -cpf - . ) | ( cd \"$work/data/home\" && tar --numeric-owner -xpf - )"
-        fi
-    fi
-    if [[ -f "$source_root/etc/ssh/sshd_config" || -d "$source_root/etc/ssh/sshd_config.d" ]]; then
-        mkdir -p "$work/data"
-        if declare -F copy_ssh_tree_to_root >/dev/null 2>&1; then
-            copy_ssh_tree_to_root "$source_root" "$work/data"
-        else
-            mkdir -p "$work/data/etc/ssh"
-            [[ -f "$source_root/etc/ssh/sshd_config" ]] && dry cp -a "$source_root/etc/ssh/sshd_config" "$work/data/etc/ssh/" || true
-            if [[ -d "$source_root/etc/ssh/sshd_config.d" ]]; then
-                mkdir -p "$work/data/etc/ssh/sshd_config.d"
-                dry cp -a "$source_root/etc/ssh/sshd_config.d/." "$work/data/etc/ssh/sshd_config.d/" || true
-            fi
-            for key in "$source_root"/etc/ssh/ssh_host_*; do [[ -f "$key" ]] && dry cp -a "$key" "$work/data/etc/ssh/" || true; done
-        fi
-    fi
-    if [[ -f "$source_root/etc/shadow" ]] && grep -q '^admin:' "$source_root/etc/shadow" 2>/dev/null; then
-        awk -F: '/^admin:/{print $0}' "$source_root/etc/shadow" >"$work/meta/shadow.admin" || true
-    fi
-    if [[ -f "$source_root/etc/fstab" ]]; then
-        mkdir -p "$work/data/etc"
-        dry cp -a "$source_root/etc/fstab" "$work/data/etc/" || true
-    fi
-    if [[ -f "$source_root/etc/sonic/custom-fan/fancontrol" ]]; then
-        mkdir -p "$work/data/etc/sonic/custom-fan"
-        dry cp -a "$source_root/etc/sonic/custom-fan/fancontrol" "$work/data/etc/sonic/custom-fan/fancontrol" || true
-    fi
-
-    # Manifest
-    local image_list=""
-    if command -v sonic-installer >/dev/null 2>&1; then
-        image_list=$(sonic-installer list 2>/dev/null || true)
-    fi
-    cat >"$work/manifest.json" <<EOF
-{
-  "created_at": "$(date -Is)",
-  "host": "$(hostname 2>/dev/null || echo unknown)",
-  "platform": "$platform",
-  "script_version": "$SONIC_SCRIPTS_VERSION",
-  "images": $(printf %q "$image_list" | sed 's/^"//;s/"$//;s/\n/\n/g' | sed 's/^/"/;s/$/"/'),
-  "paths": ["/etc/sonic/config_db.json","/home","/etc/ssh","/etc/fstab","/etc/sonic/custom-fan/fancontrol"]
-}
-EOF
-
-    # Pack
-    (cd "$work" && tar -czf "$out" .)
-    log "Backup written: $out"
 }
 
 restore_backup() {
@@ -107,60 +49,15 @@ restore_backup() {
     [[ -r "$in" ]] || die "--input not readable"
     [[ -d "$target_root" ]] || die "--target-root must be a directory"
 
-    local work
-    work=$(mktemp -d)
-    trap 'rm -rf "$work"' EXIT
-    tar -xzf "$in" -C "$work"
-
-    # Restore files
-    if [[ -f "$work/data/etc/sonic/config_db.json" ]]; then
-        mkdir -p "$target_root/etc/sonic"
-        dry cp -a "$work/data/etc/sonic/config_db.json" "$target_root/etc/sonic/config_db.json"
+    # Use Python state management core
+    local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "restore" "--input" "$in" "--target" "$target_root")
+    [[ ${DRY_RUN:-0} -eq 1 ]] && python_cmd+=(--dry-run)
+    
+    if "${python_cmd[@]}"; then
+        log "Restore completed to $target_root"
+    else
+        die "Restore failed"
     fi
-    if [[ -d "$work/data/home" ]]; then
-        mkdir -p "$target_root/home"
-        if declare -F copy_dir_tar >/dev/null 2>&1; then
-            copy_dir_tar "$work/data/home" "$target_root/home"
-        else
-            drysh "( cd \"$work/data/home\" && tar -cpf - . ) | ( cd \"$target_root/home\" && tar --numeric-owner -xpf - )"
-        fi
-    fi
-    if [[ -d "$work/data/etc/ssh" ]]; then
-        if declare -F copy_ssh_tree_to_root >/dev/null 2>&1; then
-            copy_ssh_tree_to_root "$work/data" "$target_root"
-        else
-            mkdir -p "$target_root/etc/ssh"
-            dry cp -a "$work/data/etc/ssh/." "$target_root/etc/ssh/"
-        fi
-    fi
-    if [[ -f "$work/data/etc/fstab" ]]; then
-        mkdir -p "$target_root/etc"
-        dry cp -a "$work/data/etc/fstab" "$target_root/etc/fstab"
-    fi
-    if [[ -f "$work/data/etc/sonic/custom-fan/fancontrol" ]]; then
-        mkdir -p "$target_root/etc/sonic/custom-fan"
-        dry cp -a "$work/data/etc/sonic/custom-fan/fancontrol" "$target_root/etc/sonic/custom-fan/fancontrol"
-    fi
-    # Shadow admin line
-    if [[ -f "$work/meta/shadow.admin" ]] && [[ -f "$target_root/etc/shadow" ]]; then
-        local line
-        line=$(cat "$work/meta/shadow.admin")
-        if declare -F upsert_shadow_line >/dev/null 2>&1; then
-            upsert_shadow_line "$target_root/etc/shadow" admin "$line"
-        else
-            dry cp -a "$target_root/etc/shadow" "$target_root/etc/shadow.bak.$(date +%s)" || true
-            if grep -qE '^admin:' "$target_root/etc/shadow"; then
-                sed -i "s%^admin:[^:]*:%${line%%:*}:${line#*:}%" "$target_root/etc/shadow" || {
-                    sed -i "\%^admin:% d" "$target_root/etc/shadow"; echo "$line" >>"$target_root/etc/shadow"; }
-            else
-                echo "$line" >>"$target_root/etc/shadow"
-            fi
-            chmod 640 "$target_root/etc/shadow" || true
-            chown root:shadow "$target_root/etc/shadow" || true
-        fi
-    fi
-
-    log "Restore applied to $target_root"
 }
 
 main() {
