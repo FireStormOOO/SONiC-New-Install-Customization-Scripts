@@ -5,7 +5,7 @@ set -euo pipefail
 # SONiC Upgrade Helper - Consolidated Unified Interface
 # All workflow logic integrated, fake complexity removed
 
-VERSION="0.5.1"
+VERSION="0.5.2"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck disable=SC1091
@@ -178,12 +178,12 @@ HELP
         log "Image already installed; treating as same-image workflow"
         image_dir=$(detect_current_image_dir) || die "Unable to detect current image dir"
         # For same-image, customize and activate
-        customize_image_inline "$image_dir" 1 "$rw_name" "$lower" "$no_brew" "$no_fan" 0
+        customize_image_inline "$image_dir" 1 "$rw_name" "$lower" "$no_brew" "$no_fan" 0 "install_same_image"
     else
         log "New image installed"
         image_dir=$(detect_newest_image_dir) || die "Unable to detect newly installed image dir"
         # For new image, just customize (sonic-installer handles boot order)
-        customize_image_inline "$image_dir" 0 "$rw_name" "$lower" "$no_brew" "$no_fan" 0
+        customize_image_inline "$image_dir" 0 "$rw_name" "$lower" "$no_brew" "$no_fan" 0 "install_new_image"
         
         if [[ "$activate" -eq 1 ]]; then
             local image_name
@@ -253,7 +253,7 @@ HELP
     local image_dir
     image_dir=$(detect_current_image_dir) || die "Unable to detect current image dir"
     
-    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan" 0
+    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan" 0 "reinstall"
 }
 
 # === CUSTOMIZE WORKFLOW ===
@@ -299,13 +299,13 @@ HELP
     local explicit_image=0
     [[ -n "$image_dir" ]] && explicit_image=1
     
-    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan" "$explicit_image"
+    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan" "$explicit_image" "customize"
 }
 
 # === CONSOLIDATED CUSTOMIZE LOGIC (from sonic-offline-customize.sh) ===
 
 customize_image_inline() {
-    local image_dir="$1" activate="$2" rw_name="$3" lower="$4" no_brew="$5" no_fan="$6" explicit_image="$7"
+    local image_dir="$1" activate="$2" rw_name="$3" lower="$4" no_brew="$5" no_fan="$6" explicit_image="$7" workflow_type="$8"
     
     # Auto-detect image directory if not specified
     if [[ -z "$image_dir" ]]; then
@@ -393,8 +393,24 @@ customize_image_inline() {
     else
         local image_name
         image_name=$(image_dir_to_name "$image_dir")
-        log "Customization complete. To activate: sonic-upgrade-helper overlay activate --image '$image_dir' --name '$rw_name'"
-        log "Then set next boot: sonic-installer set-next-boot '$image_name'"
+        
+        # Context-aware completion messages
+        case "$workflow_type" in
+            "reinstall")
+                log "Customization complete. To activate: sonic-upgrade-helper overlay activate --image '$image_dir' --name '$rw_name'"
+                log "Changes will take effect after reboot. (You're already running this image, so no need to change boot order)"
+                ;;
+            "install_same_image")
+                # This case shouldn't hit here since install_same_image forces activate=1
+                log "Customization complete. To activate: sonic-upgrade-helper overlay activate --image '$image_dir' --name '$rw_name'"
+                log "Changes will take effect after reboot. (Already running this image)"
+                ;;
+            "install_new_image"|"customize"|*)
+                log "Customization complete. To activate: sonic-upgrade-helper overlay activate --image '$image_dir' --name '$rw_name'"
+                log "Then set next boot: sonic-installer set-next-boot '$image_name'"
+                log "Changes will take effect after reboot."
+                ;;
+        esac
     fi
 }
 
