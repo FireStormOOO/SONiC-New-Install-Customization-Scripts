@@ -3,12 +3,25 @@
 # Common helpers for SONiC customization scripts
 # Note: Each function is defined only if not already present to avoid conflicts
 
-# Ensure directory exists
+# Internal logger (falls back to echo)
+_sonic_common_log() {
+    if declare -F log >/dev/null 2>&1; then
+        log "$@"
+    else
+        echo "$@"
+    fi
+}
+
+# Ensure directory exists (DRY-RUN aware)
 if ! declare -F ensure_dir >/dev/null 2>&1; then
 ensure_dir() {
 	local d="$1"
 	if [[ ! -d "$d" ]]; then
-		mkdir -p "$d"
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: mkdir -p $d"
+		else
+			mkdir -p "$d"
+		fi
 	fi
 }
 fi
@@ -75,7 +88,11 @@ enable_service_in_offline() {
 	local offline_root="$1" unit_name="$2"
 	ensure_dir "$offline_root/etc/systemd/system/multi-user.target.wants"
 	if [[ -f "$offline_root/etc/systemd/system/$unit_name" ]]; then
-		ln -sf "../$unit_name" "$offline_root/etc/systemd/system/multi-user.target.wants/$unit_name"
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: ln -sf ../$unit_name $offline_root/etc/systemd/system/multi-user.target.wants/$unit_name"
+		else
+			ln -sf "../$unit_name" "$offline_root/etc/systemd/system/multi-user.target.wants/$unit_name"
+		fi
 	fi
 }
 fi
@@ -85,7 +102,11 @@ if ! declare -F copy_dir_tar >/dev/null 2>&1; then
 copy_dir_tar() {
 	local src="$1" dst="$2"
 	ensure_dir "$dst"
-	( cd "$src" && tar -cpf - . ) | ( cd "$dst" && tar --numeric-owner -xpf - )
+	if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+		_sonic_common_log "DRY-RUN: tar -C $src -cpf - . | tar -C $dst --numeric-owner -xpf -"
+	else
+		( cd "$src" && tar -cpf - . ) | ( cd "$dst" && tar --numeric-owner -xpf - )
+	fi
 }
 fi
 
@@ -93,15 +114,30 @@ fi
 if ! declare -F copy_ssh_tree_to_root >/dev/null 2>&1; then
 copy_ssh_tree_to_root() {
 	local src_root="$1" dst_root="$2"
-	if [[ -f "$src_root/etc/ssh/sshd_config" ]]; then
+	if [[ -f "$src_root/etc/ssh/sshd_config" || -d "$src_root/etc/ssh/sshd_config.d" ]]; then
 		ensure_dir "$dst_root/etc/ssh"
-		cp -a "$src_root/etc/ssh/sshd_config" "$dst_root/etc/ssh/" || true
+		if [[ -f "$src_root/etc/ssh/sshd_config" ]]; then
+			if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+				_sonic_common_log "DRY-RUN: cp -a $src_root/etc/ssh/sshd_config $dst_root/etc/ssh/"
+			else
+				cp -a "$src_root/etc/ssh/sshd_config" "$dst_root/etc/ssh/" || true
+			fi
+		fi
 		if [[ -d "$src_root/etc/ssh/sshd_config.d" ]]; then
 			ensure_dir "$dst_root/etc/ssh/sshd_config.d"
-			cp -a "$src_root/etc/ssh/sshd_config.d/." "$dst_root/etc/ssh/sshd_config.d/" || true
+			if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+				_sonic_common_log "DRY-RUN: cp -a $src_root/etc/ssh/sshd_config.d/. $dst_root/etc/ssh/sshd_config.d/"
+			else
+				cp -a "$src_root/etc/ssh/sshd_config.d/." "$dst_root/etc/ssh/sshd_config.d/" || true
+			fi
 		fi
 		for key in "$src_root"/etc/ssh/ssh_host_*; do
-			[[ -f "$key" ]] && cp -a "$key" "$dst_root/etc/ssh/" || true
+			[[ -f "$key" ]] || continue
+			if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+				_sonic_common_log "DRY-RUN: cp -a $key $dst_root/etc/ssh/"
+			else
+				cp -a "$key" "$dst_root/etc/ssh/" || true
+			fi
 		done
 	fi
 }
@@ -112,16 +148,32 @@ if ! declare -F upsert_shadow_line >/dev/null 2>&1; then
 upsert_shadow_line() {
 	local target_shadow="$1" user_name="$2" full_line="$3"
 	[[ -f "$target_shadow" ]] || return 1
-	cp -a "$target_shadow" "$target_shadow.bak.$(date +%s)" || true
-	if grep -qE "^${user_name}:" "$target_shadow"; then
-		sed -i "s%^${user_name}:[^:]*:%${full_line%%:*}:${full_line#*:}%" "$target_shadow" || {
-			sed -i "\%^${user_name}:% d" "$target_shadow"; echo "$full_line" >>"$target_shadow"
-		}
+	if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+		_sonic_common_log "DRY-RUN: cp -a $target_shadow $target_shadow.bak.$(date +%s)"
 	else
-		echo "$full_line" >>"$target_shadow"
+		cp -a "$target_shadow" "$target_shadow.bak.$(date +%s)" || true
 	fi
-	chmod 640 "$target_shadow" 2>/dev/null || true
-	chown root:shadow "$target_shadow" 2>/dev/null || true
+	if grep -qE "^${user_name}:" "$target_shadow"; then
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: update shadow entry for $user_name in $target_shadow"
+		else
+			sed -i "s%^${user_name}:[^:]*:%${full_line%%:*}:${full_line#*:}%" "$target_shadow" || {
+				sed -i "\%^${user_name}:% d" "$target_shadow"; echo "$full_line" >>"$target_shadow"
+			}
+		fi
+	else
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: append shadow entry for $user_name to $target_shadow"
+		else
+			echo "$full_line" >>"$target_shadow"
+		fi
+	fi
+	if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+		_sonic_common_log "DRY-RUN: chmod 640 $target_shadow; chown root:shadow $target_shadow"
+	else
+		chmod 640 "$target_shadow" 2>/dev/null || true
+		chown root:shadow "$target_shadow" 2>/dev/null || true
+	fi
 }
 fi
 
@@ -132,14 +184,32 @@ update_fstab_for_flashdrive() {
 	local flash_mount="${FLASH_MOUNT:-/media/flashdrive}"
 	local fstab_dst="$offline_root/etc/fstab"
 	ensure_dir "$offline_root/etc"
-	if [[ -f /etc/fstab ]]; then cp -a /etc/fstab "$fstab_dst"; else : >"$fstab_dst"; fi
+	if [[ -f /etc/fstab ]]; then
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: cp -a /etc/fstab $fstab_dst"
+		else
+			cp -a /etc/fstab "$fstab_dst"
+		fi
+	else
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: : > $fstab_dst"
+		else
+			: >"$fstab_dst"
+		fi
+	fi
 	ensure_dir "$offline_root$flash_mount"
 	local src_dev uuid
 	if src_dev=$(findmnt -no SOURCE "$flash_mount" 2>/dev/null); then
 		uuid=$(blkid -s UUID -o value "$src_dev" 2>/dev/null || true)
 		if [[ -n "$uuid" ]]; then
 			local entry="UUID=$uuid $flash_mount auto defaults,nofail,x-systemd.automount 0 0"
-			grep -q "UUID=$uuid" "$fstab_dst" 2>/dev/null || echo "$entry" >>"$fstab_dst"
+			if ! grep -q "UUID=$uuid" "$fstab_dst" 2>/dev/null; then
+				if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+					_sonic_common_log "DRY-RUN: append '$entry' to $fstab_dst"
+				else
+					echo "$entry" >>"$fstab_dst"
+				fi
+			fi
 		fi
 	fi
 }
