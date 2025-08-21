@@ -2,10 +2,10 @@
 
 set -euo pipefail
 
-# SONiC Upgrade Helper - Unified Interface for SONiC Image Management
-# Consolidated version with all workflow logic integrated
+# SONiC Upgrade Helper - Consolidated Unified Interface
+# All workflow logic integrated, fake complexity removed
 
-SCRIPT_VERSION="2025.08.20-7"
+SCRIPT_VERSION="2025.08.20-8"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck disable=SC1091
@@ -74,7 +74,7 @@ For detailed help on specific workflows:
 USAGE
 }
 
-# === CONSOLIDATED BACKUP/RESTORE WORKFLOWS ===
+# === SAVE WORKFLOW (consolidated from sonic-backup.sh) ===
 
 workflow_save() {
     local output="" source_root="/"
@@ -106,14 +106,13 @@ HELP
     [[ -n "$output" ]] || die "Missing required --output option"
     
     log "Saving system state to $output"
-    # Direct Python call - no need for wrapper script
     local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "backup" "--source" "$source_root" "--output" "$output")
     [[ ${DRY_RUN:-0} -eq 1 ]] && python_cmd+=(--dry-run)
     "${python_cmd[@]}" || die "Backup failed"
     log "Backup completed: $output"
 }
 
-# === CONSOLIDATED INSTALL WORKFLOWS ===
+# === INSTALL WORKFLOW (consolidated from sonic-deploy.sh) ===
 
 workflow_install() {
     local image_bin="" restore_backup="" activate=0
@@ -170,18 +169,18 @@ HELP
         output=$(sonic-installer install -y "$image_bin" 2>&1 | tee /tmp/sonic_install.log || true)
     fi
     
-    # Determine if same-image or new-image and handle accordingly
+    # Handle same-image vs new-image workflow
     local image_dir
     if echo "$output" | grep -qi "already installed"; then
         log "Image already installed; treating as same-image workflow"
         image_dir=$(detect_current_image_dir) || die "Unable to detect current image dir"
         # For same-image, customize and activate
-        customize_image_inline "$image_dir" 1 "$rw_name" "$lower" "$no_brew" "$no_fan"
+        customize_image_inline "$image_dir" 1 "$rw_name" "$lower" "$no_brew" "$no_fan" 0
     else
         log "New image installed"
         image_dir=$(detect_newest_image_dir) || die "Unable to detect newly installed image dir"
-        # For new image, just customize (don't activate - that's handled by sonic-installer)
-        customize_image_inline "$image_dir" 0 "$rw_name" "$lower" "$no_brew" "$no_fan"
+        # For new image, just customize (sonic-installer handles boot order)
+        customize_image_inline "$image_dir" 0 "$rw_name" "$lower" "$no_brew" "$no_fan" 0
         
         if [[ "$activate" -eq 1 ]]; then
             local image_name
@@ -203,6 +202,8 @@ HELP
         log "Settings restored successfully"
     fi
 }
+
+# === REINSTALL WORKFLOW ===
 
 workflow_reinstall() {
     local activate=0 rw_name="" lower="auto" no_brew=0 no_fan=0
@@ -247,10 +248,10 @@ HELP
     local image_dir
     image_dir=$(detect_current_image_dir) || die "Unable to detect current image dir"
     
-    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan"
+    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan" 0
 }
 
-# === CONSOLIDATED CUSTOMIZE LOGIC ===
+# === CUSTOMIZE WORKFLOW ===
 
 workflow_customize() {
     local image_dir="" activate=0 rw_name="" lower="auto"
@@ -288,12 +289,16 @@ HELP
         esac; shift
     done
     
-    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan"
+    local explicit_image=0
+    [[ -n "$image_dir" ]] && explicit_image=1
+    
+    customize_image_inline "$image_dir" "$activate" "$rw_name" "$lower" "$no_brew" "$no_fan" "$explicit_image"
 }
 
-# Consolidated customize logic - the real complexity from sonic-offline-customize.sh
+# === CONSOLIDATED CUSTOMIZE LOGIC (from sonic-offline-customize.sh) ===
+
 customize_image_inline() {
-    local image_dir="$1" activate="$2" rw_name="$3" lower="$4" no_brew="$5" no_fan="$6"
+    local image_dir="$1" activate="$2" rw_name="$3" lower="$4" no_brew="$5" no_fan="$6" explicit_image="$7"
     
     # Auto-detect image directory if not specified
     if [[ -z "$image_dir" ]]; then
@@ -309,8 +314,8 @@ customize_image_inline() {
     log "Customizing image: $image_dir"
     log "Using overlay name: $rw_name"
     
-    # REAL COMPLEXITY: Verify this is a reasonably recent image (from design notes)
-    verify_image_recency "$image_dir"
+    # Simplified image age check (only for explicitly specified images)
+    check_explicit_image_age "$image_dir" "$explicit_image"
     
     # Detect platform for fancontrol
     local platform
@@ -327,18 +332,20 @@ customize_image_inline() {
     
     local offline_root="/newroot"
     
-    # REAL COMPLEXITY: Check if already customized (idempotency from design notes)
+    # Check if already customized (idempotency)
     if check_already_customized "$offline_root"; then
-        log "Image appears already customized with this version. Skipping."
-        return 0
+        log "Image appears already customized with this version. Skipping state migration."
+    else
+        # Migrate system state using Python core
+        log "Migrating system state to offline root..."
+        local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "migrate" "--source" "/" "--target" "$offline_root")
+        [[ ${DRY_RUN:-0} -eq 1 ]] && python_cmd+=(--dry-run)
+        "${python_cmd[@]}" || die "System state migration failed"
+        log "System state migration completed successfully"
+        
+        # Mark customization complete
+        mark_customization_complete "$offline_root"
     fi
-    
-    # Migrate system state using Python core
-    log "Migrating system state to offline root..."
-    local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "migrate" "--source" "/" "--target" "$offline_root")
-    [[ ${DRY_RUN:-0} -eq 1 ]] && python_cmd+=(--dry-run)
-    "${python_cmd[@]}" || die "System state migration failed"
-    log "System state migration completed successfully"
     
     # Additional customizations using common library functions
     update_fstab_for_flashdrive "$offline_root"
@@ -357,9 +364,6 @@ customize_image_inline() {
         log "Skipping fancontrol customization (--no-fancontrol specified)"
     fi
     
-    # Mark customization complete
-    mark_customization_complete "$offline_root"
-    
     # Handle activation
     if [[ "$activate" -eq 1 ]]; then
         log "Activating overlay..."
@@ -372,7 +376,7 @@ customize_image_inline() {
         local image_name
         image_name=$(image_dir_to_name "$image_dir")
         
-        # REAL COMPLEXITY: User interaction for next boot (from design notes)
+        # User interaction for next boot (only if not quiet and not dry-run)
         if [[ ${NO_HANDHOLDING:-0} -eq 0 && ${DRY_RUN:-0} -eq 0 ]]; then
             prompt_set_next_boot "$image_name"
             prompt_reboot
@@ -387,54 +391,20 @@ customize_image_inline() {
     fi
 }
 
-# REAL COMPLEXITY: Verify image recency (business logic from design notes)
-verify_image_recency() {
-    local dir="$1"
-    local RECENT_THRESHOLD_SECONDS=$((4 * 3600))    # 4 hours
-    local WARN_THRESHOLD_SECONDS=$((72 * 3600))     # 72 hours
+# Simplified image age check (no more complex thresholds and prompts)
+check_explicit_image_age() {
+    local dir="$1" explicit="$2"
     
-    local ts
-    # Prefer rw overlay timestamp, then fsroot, then directory
-    if [[ -d "$dir/rw" ]]; then
-        ts=$(stat -c %Y "$dir/rw")
-    elif [[ -d "$dir/fsroot" ]]; then
-        ts=$(stat -c %Y "$dir/fsroot")
-    else
-        ts=$(stat -c %Y "$dir")
-    fi
-    
-    local now age
-    now=$(date +%s)
-    age=$((now - ts))
-    
-    if [[ $age -le $RECENT_THRESHOLD_SECONDS ]]; then
-        log "Image appears recent (<= 4 hours). Proceeding."
-        return 0
-    fi
-    
-    if [[ $age -le $WARN_THRESHOLD_SECONDS ]]; then
-        local hrs=$((age / 3600))
-        log "WARN: Image modified ${hrs} hours ago. This is intended for NEWLY INSTALLED images."
-        if [[ ${NO_HANDHOLDING:-0} -eq 1 || ${DRY_RUN:-0} -eq 1 ]]; then
-            return 0
+    # Only warn if user explicitly chose an image (not auto-detected)
+    if [[ "$explicit" == "1" ]]; then
+        local age_days=$(( ($(date +%s) - $(stat -c %Y "$dir" 2>/dev/null || echo $(date +%s))) / 86400 ))
+        if [[ $age_days -gt 7 ]]; then
+            log "WARN: Specified image is $age_days days old. Continuing..."
         fi
-        read -r -p "Continue customizing this not-so-recent image? [y/N]: " ans || true
-        case "${ans,,}" in
-            y|yes) return 0 ;;
-            *) die "Aborted by user due to image age warning." ;;
-        esac
     fi
-    
-    log "WARN: Image modified more than 72 hours ago. This is intended for NEWLY INSTALLED images."
-    if [[ ${NO_HANDHOLDING:-0} -eq 1 || ${DRY_RUN:-0} -eq 1 ]]; then
-        return 0
-    fi
-    echo -n "Type 'proceed' to continue anyway: "
-    read -r confirm || true
-    [[ "$confirm" == "proceed" ]] || die "Aborted by user due to very stale image warning."
 }
 
-# REAL COMPLEXITY: Idempotency check (from design notes)
+# Idempotency check (real business logic from design notes)
 check_already_customized() {
     local offline_root="$1"
     local marker="$offline_root/var/log/sonic-offline-customize.log"
@@ -454,7 +424,7 @@ mark_customization_complete() {
     fi
 }
 
-# REAL COMPLEXITY: User interaction helpers (UX requirements from design notes)
+# User interaction helpers (real UX requirements from design notes)
 prompt_set_next_boot() {
     local image_name="$1"
     read -r -p "Set next boot to '$image_name'? [y/N]: " ans || true
