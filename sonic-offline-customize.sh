@@ -173,14 +173,10 @@ verify_recent_install() {
 copy_homes() {
     local offline_root="$1"
     ensure_dir "$offline_root/home"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "DRY-RUN: tar -C /home -cpf - . | tar -C $offline_root/home --numeric-owner -xpf -"
+    if declare -F copy_dir_tar >/dev/null 2>&1; then
+        copy_dir_tar "/home" "$offline_root/home"
     else
-        if declare -F copy_dir_tar >/dev/null 2>&1; then
-            copy_dir_tar "/home" "$offline_root/home"
-        else
-            ( cd /home && tar -cpf - . ) | ( cd "$offline_root/home" && tar --numeric-owner -xpf - )
-        fi
+        drysh "( cd /home && tar -cpf - . ) | ( cd \"$offline_root/home\" && tar --numeric-owner -xpf - )"
     fi
     log "Copied /home"
 }
@@ -191,29 +187,12 @@ copy_ssh_settings_and_keys() {
         copy_ssh_tree_to_root "/" "$offline_root"
     else
         ensure_dir "$offline_root/etc/ssh"
-        if [[ -f /etc/ssh/sshd_config ]]; then
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                log "DRY-RUN: cp -a /etc/ssh/sshd_config $offline_root/etc/ssh/sshd_config"
-            else
-                cp -a /etc/ssh/sshd_config "$offline_root/etc/ssh/sshd_config"
-            fi
-        fi
+        [[ -f /etc/ssh/sshd_config ]] && dry cp -a /etc/ssh/sshd_config "$offline_root/etc/ssh/sshd_config"
         if [[ -d /etc/ssh/sshd_config.d ]]; then
             ensure_dir "$offline_root/etc/ssh/sshd_config.d"
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                log "DRY-RUN: cp -a /etc/ssh/sshd_config.d/. $offline_root/etc/ssh/sshd_config.d/"
-            else
-                cp -a /etc/ssh/sshd_config.d/. "$offline_root/etc/ssh/sshd_config.d/" || true
-            fi
+            dry cp -a /etc/ssh/sshd_config.d/. "$offline_root/etc/ssh/sshd_config.d/" || true
         fi
-        for key in /etc/ssh/ssh_host_*; do
-            [[ -f "$key" ]] || continue
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                log "DRY-RUN: cp -a $key $offline_root/etc/ssh/"
-            else
-                cp -a "$key" "$offline_root/etc/ssh/"
-            fi
-        done
+        for key in /etc/ssh/ssh_host_*; do [[ -f "$key" ]] && dry cp -a "$key" "$offline_root/etc/ssh/" || true; done
     fi
     if [[ -d /home ]]; then
         for homedir in /home/*; do
@@ -273,9 +252,7 @@ set_next_boot_prompt() {
     read -r -p "Set next boot to '$image_name'? [y/N]: " ans || true
     case "${ans,,}" in
         y|yes)
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                log "DRY-RUN: sonic-installer set-next-boot $image_name"
-            elif sonic-installer set-next-boot "$image_name"; then
+            if dry sonic-installer set-next-boot "$image_name"; then
                 log "Set next boot to $image_name"
             else
                 log "WARN: Failed to set next boot via sonic-installer. You can run: sonic-installer set-next-boot '$image_name'"
@@ -291,13 +268,9 @@ maybe_reboot_prompt() {
     read -r -p "Reboot now to cut over? [y/N]: " ans || true
     case "${ans,,}" in
         y|yes)
-            if [[ "$DRY_RUN" -eq 1 ]]; then
-                log "DRY-RUN: reboot"
-            else
-                log "Rebooting..."
-                sleep 1
-                reboot
-            fi
+            log "Rebooting..."
+            sleep 1
+            dry reboot
             ;;
         *)
             log "Not rebooting. Changes will take effect on next boot."
@@ -313,11 +286,12 @@ prepare_overlay_or_die() {
     local cmd=("$overlay_tool" prepare --image-dir "$image_dir" --lower "$lower_mode" --rw-name "$rw_name" --mount)
     if [[ "$DRY_RUN" -eq 1 ]]; then
         log "DRY-RUN: ${cmd[*]}"
+        return 0
     else
         "${cmd[@]}"
-    fi
-    if ! mountpoint -q /newroot; then
-        die "/newroot is not mounted; overlay prepare failed"
+        if ! mountpoint -q /newroot; then
+            die "/newroot is not mounted; overlay prepare failed"
+        fi
     fi
 }
 
