@@ -199,7 +199,7 @@ class BackupAdapter(StateAdapter):
             manifest = {
                 'created_at': subprocess.check_output(['date', '-Is']).decode().strip(),
                 'host': subprocess.check_output(['hostname']).decode().strip(),
-                'script_version': '2025.08.20-5',
+                'script_version': '0.5.0',
                 'components': list(self._data.keys())
             }
             

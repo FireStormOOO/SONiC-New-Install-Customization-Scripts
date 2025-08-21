@@ -5,7 +5,7 @@ set -euo pipefail
 # SONiC Upgrade Helper - Consolidated Unified Interface
 # All workflow logic integrated, fake complexity removed
 
-SCRIPT_VERSION="2025.08.20-8"
+VERSION="0.5.0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck disable=SC1091
@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {
     cat <<USAGE
-SONiC Upgrade Helper - Unified Interface for SONiC Image Management
+SONiC Upgrade Helper v$VERSION - Unified Interface for SONiC Image Management
 
 COMMON WORKFLOWS:
   sonic-upgrade-helper save --output <backup.tar.gz>
@@ -51,6 +51,7 @@ DEBUG/TESTING WORKFLOWS:
 GLOBAL OPTIONS:
   --dry-run, -n         Show what would be done without making changes
   --quiet, -q           Minimize output (implies --no-handholding)
+  --version, -v         Show version information
   --help, -h            Show this help
 
 EXAMPLES:
@@ -549,6 +550,7 @@ main() {
         case "$1" in
             --dry-run|-n) export DRY_RUN=1; shift ;;
             --quiet|-q) export NO_HANDHOLDING=1; shift ;;
+            --version|-v) echo "SONiC Upgrade Helper v$VERSION"; exit 0 ;;
             -h|--help) usage; exit 0 ;;
             -*) die "Unknown global option: $1" ;;
             *) break ;;  # Not a global option, must be workflow
