@@ -231,30 +231,38 @@ copy_homes() {
 
 copy_ssh_settings_and_keys() {
     local offline_root="$1"
-    ensure_dir "$offline_root/etc/ssh"
-    if [[ -f /etc/ssh/sshd_config ]]; then
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a /etc/ssh/sshd_config $offline_root/etc/ssh/sshd_config"
+    if declare -F copy_ssh_tree_to_root >/dev/null 2>&1 && [[ "$DRY_RUN" -eq 1 ]]; then
+        log "DRY-RUN: copy_ssh_tree_to_root / $offline_root"
+    else
+        if declare -F copy_ssh_tree_to_root >/dev/null 2>&1; then
+            copy_ssh_tree_to_root "/" "$offline_root"
         else
-            cp -a /etc/ssh/sshd_config "$offline_root/etc/ssh/sshd_config"
+            ensure_dir "$offline_root/etc/ssh"
+            if [[ -f /etc/ssh/sshd_config ]]; then
+                if [[ "$DRY_RUN" -eq 1 ]]; then
+                    log "DRY-RUN: cp -a /etc/ssh/sshd_config $offline_root/etc/ssh/sshd_config"
+                else
+                    cp -a /etc/ssh/sshd_config "$offline_root/etc/ssh/sshd_config"
+                fi
+            fi
+            if [[ -d /etc/ssh/sshd_config.d ]]; then
+                ensure_dir "$offline_root/etc/ssh/sshd_config.d"
+                if [[ "$DRY_RUN" -eq 1 ]]; then
+                    log "DRY-RUN: cp -a /etc/ssh/sshd_config.d/. $offline_root/etc/ssh/sshd_config.d/"
+                else
+                    cp -a /etc/ssh/sshd_config.d/. "$offline_root/etc/ssh/sshd_config.d/" || true
+                fi
+            fi
+            for key in /etc/ssh/ssh_host_*; do
+                [[ -f "$key" ]] || continue
+                if [[ "$DRY_RUN" -eq 1 ]]; then
+                    log "DRY-RUN: cp -a $key $offline_root/etc/ssh/"
+                else
+                    cp -a "$key" "$offline_root/etc/ssh/"
+                fi
+            done
         fi
     fi
-    if [[ -d /etc/ssh/sshd_config.d ]]; then
-        ensure_dir "$offline_root/etc/ssh/sshd_config.d"
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a /etc/ssh/sshd_config.d/. $offline_root/etc/ssh/sshd_config.d/"
-        else
-            cp -a /etc/ssh/sshd_config.d/. "$offline_root/etc/ssh/sshd_config.d/" || true
-        fi
-    fi
-    for key in /etc/ssh/ssh_host_*; do
-        [[ -f "$key" ]] || continue
-        if [[ "$DRY_RUN" -eq 1 ]]; then
-            log "DRY-RUN: cp -a $key $offline_root/etc/ssh/"
-        else
-            cp -a "$key" "$offline_root/etc/ssh/"
-        fi
-    done
     if [[ -d /home ]]; then
         for homedir in /home/*; do
             [[ -d "$homedir" ]] || continue

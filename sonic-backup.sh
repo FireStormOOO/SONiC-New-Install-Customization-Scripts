@@ -66,14 +66,19 @@ create_backup() {
             ( cd "$source_root/home" && tar -cpf - . ) | ( cd "$work/data/home" && tar --numeric-owner -xpf - )
         fi
     fi
-    if [[ -f "$source_root/etc/ssh/sshd_config" ]]; then
-        mkdir -p "$work/data/etc/ssh"
-        cp -a "$source_root/etc/ssh/sshd_config" "$work/data/etc/ssh/" || true
-        if [[ -d "$source_root/etc/ssh/sshd_config.d" ]]; then
-            mkdir -p "$work/data/etc/ssh/sshd_config.d"
-            cp -a "$source_root/etc/ssh/sshd_config.d/." "$work/data/etc/ssh/sshd_config.d/" || true
+    if [[ -f "$source_root/etc/ssh/sshd_config" || -d "$source_root/etc/ssh/sshd_config.d" ]]; then
+        mkdir -p "$work/data"
+        if declare -F copy_ssh_tree_to_root >/dev/null 2>&1; then
+            copy_ssh_tree_to_root "$source_root" "$work/data"
+        else
+            mkdir -p "$work/data/etc/ssh"
+            [[ -f "$source_root/etc/ssh/sshd_config" ]] && cp -a "$source_root/etc/ssh/sshd_config" "$work/data/etc/ssh/" || true
+            if [[ -d "$source_root/etc/ssh/sshd_config.d" ]]; then
+                mkdir -p "$work/data/etc/ssh/sshd_config.d"
+                cp -a "$source_root/etc/ssh/sshd_config.d/." "$work/data/etc/ssh/sshd_config.d/" || true
+            fi
+            for key in "$source_root"/etc/ssh/ssh_host_*; do [[ -f "$key" ]] && cp -a "$key" "$work/data/etc/ssh/" || true; done
         fi
-        for key in "$source_root"/etc/ssh/ssh_host_*; do [[ -f "$key" ]] && cp -a "$key" "$work/data/etc/ssh/" || true; done
     fi
     if [[ -f "$source_root/etc/shadow" ]] && grep -q '^admin:' "$source_root/etc/shadow" 2>/dev/null; then
         awk -F: '/^admin:/{print $0}' "$source_root/etc/shadow" >"$work/meta/shadow.admin" || true
@@ -132,8 +137,12 @@ restore_backup() {
         fi
     fi
     if [[ -d "$work/data/etc/ssh" ]]; then
-        mkdir -p "$target_root/etc/ssh"
-        cp -a "$work/data/etc/ssh/." "$target_root/etc/ssh/"
+        if declare -F copy_ssh_tree_to_root >/dev/null 2>&1; then
+            copy_ssh_tree_to_root "$work/data" "$target_root"
+        else
+            mkdir -p "$target_root/etc/ssh"
+            cp -a "$work/data/etc/ssh/." "$target_root/etc/ssh/"
+        fi
     fi
     if [[ -f "$work/data/etc/fstab" ]]; then
         mkdir -p "$target_root/etc"
@@ -147,15 +156,19 @@ restore_backup() {
     if [[ -f "$work/meta/shadow.admin" ]] && [[ -f "$target_root/etc/shadow" ]]; then
         local line
         line=$(cat "$work/meta/shadow.admin")
-        cp -a "$target_root/etc/shadow" "$target_root/etc/shadow.bak.$(date +%s)" || true
-        if grep -qE '^admin:' "$target_root/etc/shadow"; then
-            sed -i "s%^admin:[^:]*:%${line%%:*}:${line#*:}%" "$target_root/etc/shadow" || {
-                sed -i "\%^admin:% d" "$target_root/etc/shadow"; echo "$line" >>"$target_root/etc/shadow"; }
+        if declare -F upsert_shadow_line >/dev/null 2>&1; then
+            upsert_shadow_line "$target_root/etc/shadow" admin "$line"
         else
-            echo "$line" >>"$target_root/etc/shadow"
+            cp -a "$target_root/etc/shadow" "$target_root/etc/shadow.bak.$(date +%s)" || true
+            if grep -qE '^admin:' "$target_root/etc/shadow"; then
+                sed -i "s%^admin:[^:]*:%${line%%:*}:${line#*:}%" "$target_root/etc/shadow" || {
+                    sed -i "\%^admin:% d" "$target_root/etc/shadow"; echo "$line" >>"$target_root/etc/shadow"; }
+            else
+                echo "$line" >>"$target_root/etc/shadow"
+            fi
+            chmod 640 "$target_root/etc/shadow" || true
+            chown root:shadow "$target_root/etc/shadow" || true
         fi
-        chmod 640 "$target_root/etc/shadow" || true
-        chown root:shadow "$target_root/etc/shadow" || true
     fi
 
     log "Restore applied to $target_root"

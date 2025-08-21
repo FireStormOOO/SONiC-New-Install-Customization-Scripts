@@ -89,6 +89,42 @@ copy_dir_tar() {
 }
 fi
 
+# Copy system SSH server config and host keys from a source root into a target root
+if ! declare -F copy_ssh_tree_to_root >/dev/null 2>&1; then
+copy_ssh_tree_to_root() {
+	local src_root="$1" dst_root="$2"
+	if [[ -f "$src_root/etc/ssh/sshd_config" ]]; then
+		ensure_dir "$dst_root/etc/ssh"
+		cp -a "$src_root/etc/ssh/sshd_config" "$dst_root/etc/ssh/" || true
+		if [[ -d "$src_root/etc/ssh/sshd_config.d" ]]; then
+			ensure_dir "$dst_root/etc/ssh/sshd_config.d"
+			cp -a "$src_root/etc/ssh/sshd_config.d/." "$dst_root/etc/ssh/sshd_config.d/" || true
+		fi
+		for key in "$src_root"/etc/ssh/ssh_host_*; do
+			[[ -f "$key" ]] && cp -a "$key" "$dst_root/etc/ssh/" || true
+		done
+	fi
+}
+fi
+
+# Upsert a full passwd/shadow line for the given user in target shadow file
+if ! declare -F upsert_shadow_line >/dev/null 2>&1; then
+upsert_shadow_line() {
+	local target_shadow="$1" user_name="$2" full_line="$3"
+	[[ -f "$target_shadow" ]] || return 1
+	cp -a "$target_shadow" "$target_shadow.bak.$(date +%s)" || true
+	if grep -qE "^${user_name}:" "$target_shadow"; then
+		sed -i "s%^${user_name}:[^:]*:%${full_line%%:*}:${full_line#*:}%" "$target_shadow" || {
+			sed -i "\%^${user_name}:% d" "$target_shadow"; echo "$full_line" >>"$target_shadow"
+		}
+	else
+		echo "$full_line" >>"$target_shadow"
+	fi
+	chmod 640 "$target_shadow" 2>/dev/null || true
+	chown root:shadow "$target_shadow" 2>/dev/null || true
+}
+fi
+
 # Update offline fstab with flashdrive UUID entry if mounted. FLASH_MOUNT can be overridden by env.
 if ! declare -F update_fstab_for_flashdrive >/dev/null 2>&1; then
 update_fstab_for_flashdrive() {
