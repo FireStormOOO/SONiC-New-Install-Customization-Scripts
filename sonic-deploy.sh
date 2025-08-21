@@ -8,7 +8,7 @@ set -euo pipefail
 # - restore: prepare overlay on target image and restore backup into /newroot
 # - install: sonic-installer install -f <bin>; customize against overlay; if same-image, activate overlay
 
-SCRIPT_VERSION="2025.08.20-2"
+SCRIPT_VERSION="2025.08.20-3"
 
 usage() {
     cat <<USAGE
@@ -28,6 +28,11 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
 need_root() { [[ ${EUID} -eq 0 ]] || die "Must run as root"; }
+
+# source common helpers (required)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/lib/sonic-common.sh"
 
 # source common helpers
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
