@@ -215,3 +215,128 @@ update_fstab_for_flashdrive() {
 }
 fi
 
+# Create brew-bootstrap.service in offline root and enable it
+if ! declare -F install_brew_first_boot_service_to_root >/dev/null 2>&1; then
+install_brew_first_boot_service_to_root() {
+	local offline_root="$1"
+	ensure_dir "$offline_root/etc/systemd/system"
+	ensure_dir "$offline_root/var/lib/sonic"
+	if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+		_sonic_common_log "DRY-RUN: write $offline_root/etc/systemd/system/brew-bootstrap.service"
+	else
+		cat >"$offline_root/etc/systemd/system/brew-bootstrap.service" <<'EOF'
+[Unit]
+Description=Bootstrap Homebrew on first boot
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/sonic/brew_bootstrap_done
+
+[Service]
+Type=oneshot
+Environment=NONINTERACTIVE=1
+Environment=CI=1
+ExecStart=/bin/bash -lc 'set -e; if command -v curl >/dev/null 2>&1; then sh -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" || true; else echo "curl not found; skipping brew install"; fi; touch /var/lib/sonic/brew_bootstrap_done'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+	fi
+	enable_service_in_offline "$offline_root" "brew-bootstrap.service"
+}
+fi
+
+# Install fancontrol assets and override unit into offline root
+if ! declare -F install_fancontrol_assets_to_root >/dev/null 2>&1; then
+install_fancontrol_assets_to_root() {
+	local offline_root="$1" platform="$2" flash_mount="${FLASH_MOUNT:-/media/flashdrive}"
+	local platform_dir="$offline_root/usr/share/sonic/device/$platform"
+	ensure_dir "$platform_dir"
+	ensure_dir "$offline_root/etc/sonic/custom-fan"
+	local custom_settings="$flash_mount/fancontrol-custom4.bak"
+	if [[ -f "$custom_settings" ]]; then
+		if [[ -f "$platform_dir/fancontrol" && "${DRY_RUN:-0}" -ne 1 ]]; then
+			cp -a "$platform_dir/fancontrol" "$platform_dir/fancontrol.bak.$(date +%s)" || true
+		fi
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: cp -a $custom_settings $platform_dir/fancontrol"
+			_sonic_common_log "DRY-RUN: cp -a $custom_settings $offline_root/etc/sonic/custom-fan/fancontrol"
+		else
+			cp -a "$custom_settings" "$platform_dir/fancontrol"
+			cp -a "$custom_settings" "$offline_root/etc/sonic/custom-fan/fancontrol"
+		fi
+	fi
+	if [[ -f "$flash_mount/fancontrol" ]]; then
+		ensure_dir "$offline_root/usr/sbin"
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: cp -a $flash_mount/fancontrol $offline_root/usr/sbin/fancontrol; chmod +x"
+		else
+			cp -a "$flash_mount/fancontrol" "$offline_root/usr/sbin/fancontrol"
+			chmod +x "$offline_root/usr/sbin/fancontrol" || true
+		fi
+	fi
+	# Override service
+	if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+		_sonic_common_log "DRY-RUN: write $offline_root/etc/systemd/system/fancontrol-override.service"
+	else
+		cat >"$offline_root/etc/systemd/system/fancontrol-override.service" <<EOF
+[Unit]
+Description=Restore custom fancontrol and restart pmon
+After=pmon.service network-online.target
+Wants=pmon.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'set -e; SRC=/etc/sonic/custom-fan/fancontrol; DST=/usr/share/sonic/device/$platform/fancontrol; if [ -f "$SRC" ]; then cp -f "$SRC" "$DST"; systemctl restart pmon.service; else echo "fancontrol override: $SRC not present; skipping"; fi'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+	fi
+	enable_service_in_offline "$offline_root" "fancontrol-override.service"
+}
+fi
+
+# Copy config_db.json into offline root
+if ! declare -F copy_config_db_to_root >/dev/null 2>&1; then
+copy_config_db_to_root() {
+	local offline_root="$1" src="/etc/sonic/config_db.json" dst="$offline_root/etc/sonic/config_db.json"
+	if [[ -f "$src" ]]; then
+		ensure_dir "$offline_root/etc/sonic"
+		if [[ -f "$dst" && "${DRY_RUN:-0}" -ne 1 ]]; then
+			cp -a "$dst" "$dst.bak.$(date +%s)" || true
+		fi
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: cp -a $src $dst"
+		else
+			cp -a "$src" "$dst"
+		fi
+	fi
+}
+fi
+
+# Initialize log file under offline root and copy self script for traceability
+if ! declare -F init_log_and_copy_self_to_root >/dev/null 2>&1; then
+init_log_and_copy_self_to_root() {
+	local offline_root="$1" script_version="$2" self_path="$3"
+	ensure_dir "$offline_root/var/log"
+	local logfile="$offline_root/var/log/sonic-offline-customize.log"
+	if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+		_sonic_common_log "DRY-RUN: touch $logfile; chmod 640; append version"
+	else
+		touch "$logfile"
+		chmod 640 "$logfile" || true
+		echo "VERSION $script_version $(date -Is)" >>"$logfile" || true
+	fi
+	ensure_dir "$offline_root/usr/local/sbin"
+	if [[ -n "$self_path" ]]; then
+		if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+			_sonic_common_log "DRY-RUN: cp -a $self_path $offline_root/usr/local/sbin/sonic-offline-customize.sh"
+		else
+			cp -a "$self_path" "$offline_root/usr/local/sbin/sonic-offline-customize.sh" || true
+		fi
+	fi
+	echo "$logfile"
+}
+fi
+
+

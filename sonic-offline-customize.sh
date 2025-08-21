@@ -469,21 +469,26 @@ EOF
 
 write_marker_and_copy_self() {
     local offline_root="$1"
-    ensure_dir "$offline_root/var/log"
-    LOGFILE="$offline_root/var/log/sonic-offline-customize.log"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "DRY-RUN: would create log file at $LOGFILE"
-    else
-        touch "$LOGFILE"
-        chmod 640 "$LOGFILE" || true
-        echo "VERSION $SCRIPT_VERSION $(date -Is)" >>"$LOGFILE" || true
+    if declare -F init_log_and_copy_self_to_root >/dev/null 2>&1; then
+        LOGFILE=$(init_log_and_copy_self_to_root "$offline_root" "$SCRIPT_VERSION" "$0")
         log "Logging to $LOGFILE (version $SCRIPT_VERSION)"
-    fi
-    ensure_dir "$offline_root/usr/local/sbin"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-        log "DRY-RUN: cp -a $0 $offline_root/usr/local/sbin/sonic-offline-customize.sh"
     else
-        cp -a "$0" "$offline_root/usr/local/sbin/sonic-offline-customize.sh" || true
+        ensure_dir "$offline_root/var/log"
+        LOGFILE="$offline_root/var/log/sonic-offline-customize.log"
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            log "DRY-RUN: would create log file at $LOGFILE"
+        else
+            touch "$LOGFILE"
+            chmod 640 "$LOGFILE" || true
+            echo "VERSION $SCRIPT_VERSION $(date -Is)" >>"$LOGFILE" || true
+            log "Logging to $LOGFILE (version $SCRIPT_VERSION)"
+        fi
+        ensure_dir "$offline_root/usr/local/sbin"
+        if [[ "$DRY_RUN" -eq 1 ]]; then
+            log "DRY-RUN: cp -a $0 $offline_root/usr/local/sbin/sonic-offline-customize.sh"
+        else
+            cp -a "$0" "$offline_root/usr/local/sbin/sonic-offline-customize.sh" || true
+        fi
     fi
 }
 
@@ -666,18 +671,31 @@ main() {
     fi
     log "Detected platform: $platform"
 
-    copy_config_db "$offline_root"
+    if declare -F copy_config_db_to_root >/dev/null 2>&1; then
+        copy_config_db_to_root "$offline_root"
+        log "Copied config_db.json"
+    else
+        copy_config_db "$offline_root"
+    fi
     copy_homes "$offline_root"
     copy_ssh_settings_and_keys "$offline_root"
     copy_admin_password_hash "$offline_root"
     update_fstab_for_flashdrive "$offline_root"
     if [[ "$DISABLE_BREW" -eq 0 ]]; then
-        install_brew_first_boot_service "$offline_root"
+        if declare -F install_brew_first_boot_service_to_root >/dev/null 2>&1; then
+            install_brew_first_boot_service_to_root "$offline_root"
+        else
+            install_brew_first_boot_service "$offline_root"
+        fi
     else
         log "Skipping Homebrew bootstrap (flagged --no-brew)"
     fi
     if [[ "$DISABLE_FANCONTROL" -eq 0 ]]; then
-        install_fancontrol_assets "$offline_root" "$platform"
+        if declare -F install_fancontrol_assets_to_root >/dev/null 2>&1; then
+            install_fancontrol_assets_to_root "$offline_root" "$platform"
+        else
+            install_fancontrol_assets "$offline_root" "$platform"
+        fi
     else
         log "Skipping fancontrol customization (flagged --no-fancontrol)"
     fi
