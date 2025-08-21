@@ -235,6 +235,19 @@ class StateManager:
     
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
+        self.validate_environment()
+    
+    def validate_environment(self):
+        """Validate that we have necessary tools and permissions"""
+        if not self.dry_run:
+            if os.geteuid() != 0:
+                raise PermissionError("State management operations require root privileges")
+        
+        # Check for required tools
+        required_tools = ['tar', 'date', 'hostname']
+        for tool in required_tools:
+            if not shutil.which(tool):
+                raise RuntimeError(f"Required tool '{tool}' not found in PATH")
     
     def _handle_special_component(self, component: StateComponent, source: StateAdapter, dest: StateAdapter):
         """Handle components with special processing requirements"""
@@ -399,6 +412,37 @@ class StateManager:
         
         logger.info(f"Migration {'completed' if success else 'completed with warnings'}")
         return success
+    
+    def validate_state(self, source_root: str) -> bool:
+        """Validate that all required state components are present and accessible"""
+        logger.info(f"Validating state components in {source_root}")
+        
+        source = FilesystemAdapter(source_root, self.dry_run)
+        success = True
+        
+        for component in SONIC_STATE_COMPONENTS.values():
+            logger.info(f"Validating component: {component.name}")
+            
+            if component.component_type == 'file':
+                if source.exists(component.path):
+                    logger.info(f"  ✓ {component.path} exists")
+                elif component.required:
+                    logger.error(f"  ✗ Required file {component.path} missing")
+                    success = False
+                else:
+                    logger.info(f"  - Optional file {component.path} not present")
+            
+            elif component.component_type == 'directory':
+                if source.exists(component.path):
+                    logger.info(f"  ✓ {component.path} directory exists")
+                elif component.required:
+                    logger.error(f"  ✗ Required directory {component.path} missing")
+                    success = False
+                else:
+                    logger.info(f"  - Optional directory {component.path} not present")
+        
+        logger.info(f"Validation {'passed' if success else 'failed'}")
+        return success
 
 def main():
     """CLI interface for state management"""
@@ -423,6 +467,10 @@ def main():
     migrate_parser.add_argument('--source', default='/', help='Source root path')
     migrate_parser.add_argument('--target', required=True, help='Target root path')
     
+    # Validate command
+    validate_parser = subparsers.add_parser('validate', help='Validate state components')
+    validate_parser.add_argument('--source', default='/', help='Source root path to validate')
+    
     args = parser.parse_args()
     
     if not args.command:
@@ -438,6 +486,8 @@ def main():
             success = manager.restore_state(args.input, args.target)
         elif args.command == 'migrate':
             success = manager.migrate_state(args.source, args.target)
+        elif args.command == 'validate':
+            success = manager.validate_state(args.source)
         
         return 0 if success else 1
         

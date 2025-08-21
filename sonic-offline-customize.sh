@@ -170,48 +170,7 @@ verify_recent_install() {
     fi
 }
 
-copy_homes() {
-    local offline_root="$1"
-    ensure_dir "$offline_root/home"
-    if declare -F copy_dir_tar >/dev/null 2>&1; then
-        copy_dir_tar "/home" "$offline_root/home"
-    else
-        drysh "( cd /home && tar -cpf - . ) | ( cd \"$offline_root/home\" && tar --numeric-owner -xpf - )"
-    fi
-    log "Copied /home"
-}
-
-copy_ssh_settings_and_keys() {
-    local offline_root="$1"
-    if declare -F copy_ssh_tree_to_root >/dev/null 2>&1; then
-        copy_ssh_tree_to_root "/" "$offline_root"
-    else
-        ensure_dir "$offline_root/etc/ssh"
-        [[ -f /etc/ssh/sshd_config ]] && dry cp -a /etc/ssh/sshd_config "$offline_root/etc/ssh/sshd_config"
-        if [[ -d /etc/ssh/sshd_config.d ]]; then
-            ensure_dir "$offline_root/etc/ssh/sshd_config.d"
-            dry cp -a /etc/ssh/sshd_config.d/. "$offline_root/etc/ssh/sshd_config.d/" || true
-        fi
-        for key in /etc/ssh/ssh_host_*; do [[ -f "$key" ]] && dry cp -a "$key" "$offline_root/etc/ssh/" || true; done
-    fi
-    if [[ -d /home ]]; then
-        for homedir in /home/*; do
-            [[ -d "$homedir" ]] || continue
-            local rel
-            rel=${homedir#/home/}
-            ensure_dir "$offline_root/home/$rel"
-            if [[ -d "$homedir/.ssh" ]]; then
-                ensure_dir "$offline_root/home/$rel/.ssh"
-                if [[ "$DRY_RUN" -eq 1 ]]; then
-                    log "DRY-RUN: cp -a $homedir/.ssh/. $offline_root/home/$rel/.ssh/"
-                else
-                    cp -a "$homedir/.ssh/." "$offline_root/home/$rel/.ssh/" || true
-                fi
-            fi
-        done
-    fi
-    log "Copied SSH config, host keys, and user keys"
-}
+# Legacy functions removed - all state management now handled by Python sonic_state.py
 
 write_marker_and_copy_self() {
     local offline_root="$1"
@@ -417,18 +376,8 @@ main() {
     local python_cmd=("python3" "$SCRIPT_DIR/lib/sonic_state.py" "migrate" "--source" "/" "--target" "$offline_root")
     [[ "$DRY_RUN" -eq 1 ]] && python_cmd+=(--dry-run)
     
-    if "${python_cmd[@]}"; then
-        log "System state migration completed successfully"
-    else
-        log "WARN: Python state migration failed, falling back to legacy methods"
-        # Fallback to old methods for compatibility
-        copy_config_db_to_root "$offline_root"
-        log "Copied config_db.json"
-        copy_homes "$offline_root"
-        copy_ssh_settings_and_keys "$offline_root"
-        migrate_password_hash_to_root "$offline_root" "admin"
-        log "Migrated admin password hash (legacy mode)"
-    fi
+    "${python_cmd[@]}" || die "System state migration failed"
+    log "System state migration completed successfully"
     update_fstab_for_flashdrive "$offline_root"
     if [[ "$DISABLE_BREW" -eq 0 ]]; then
         install_brew_first_boot_service_to_root "$offline_root"
