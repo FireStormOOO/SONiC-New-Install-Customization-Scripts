@@ -5,7 +5,7 @@ set -euo pipefail
 # SONiC backup/restore helper
 # Creates a tarball with key configuration and an accompanying manifest
 
-SCRIPT_VERSION="2025.08.20-1"
+SCRIPT_VERSION="2025.08.20-2"
 
 usage() {
     cat <<USAGE
@@ -29,14 +29,15 @@ need_root() {
     if [[ ${EUID} -ne 0 ]]; then die "Must run as root"; fi
 }
 
-detect_platform() {
-    local platform=""
-    if command -v sonic-cfggen >/dev/null 2>&1; then
-        platform=$(sonic-cfggen -H -v DEVICE_METADATA.localhost.platform 2>/dev/null || true)
-    fi
-    [[ -n "$platform" ]] || platform="unknown"
-    echo "$platform"
-}
+# source common helpers
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "$SCRIPT_DIR/lib/sonic-common.sh" ]]; then
+    # shellcheck disable=SC1091
+    . "$SCRIPT_DIR/lib/sonic-common.sh"
+fi
+
+# prefer library detect_platform
+declare -F detect_platform >/dev/null 2>&1 || detect_platform() { echo unknown; }
 
 create_backup() {
     local out="$1" source_root="${2:-/}"
@@ -59,7 +60,11 @@ create_backup() {
     fi
     if [[ -d "$source_root/home" ]]; then
         mkdir -p "$work/data/home"
-        ( cd "$source_root/home" && tar -cpf - . ) | ( cd "$work/data/home" && tar --numeric-owner -xpf - )
+        if declare -F copy_dir_tar >/dev/null 2>&1; then
+            copy_dir_tar "$source_root/home" "$work/data/home"
+        else
+            ( cd "$source_root/home" && tar -cpf - . ) | ( cd "$work/data/home" && tar --numeric-owner -xpf - )
+        fi
     fi
     if [[ -f "$source_root/etc/ssh/sshd_config" ]]; then
         mkdir -p "$work/data/etc/ssh"
@@ -120,7 +125,11 @@ restore_backup() {
     fi
     if [[ -d "$work/data/home" ]]; then
         mkdir -p "$target_root/home"
-        ( cd "$work/data/home" && tar -cpf - . ) | ( cd "$target_root/home" && tar --numeric-owner -xpf - )
+        if declare -F copy_dir_tar >/dev/null 2>&1; then
+            copy_dir_tar "$work/data/home" "$target_root/home"
+        else
+            ( cd "$work/data/home" && tar -cpf - . ) | ( cd "$target_root/home" && tar --numeric-owner -xpf - )
+        fi
     fi
     if [[ -d "$work/data/etc/ssh" ]]; then
         mkdir -p "$target_root/etc/ssh"

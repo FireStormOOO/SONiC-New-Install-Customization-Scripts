@@ -12,7 +12,7 @@ WARN_THRESHOLD_SECONDS=$((72 * 3600))
 
 FLASH_MOUNT="/media/flashdrive"
 
-SCRIPT_VERSION="2025.08.20-4"
+SCRIPT_VERSION="2025.08.20-5"
 DRY_RUN=0
 NO_HANDHOLDING=0
 DISABLE_BREW=0
@@ -70,6 +70,13 @@ need_root() {
         die "This script must be run as root."
     fi
 }
+
+# source common helpers early (still honor local overrides)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "$SCRIPT_DIR/lib/sonic-common.sh" ]]; then
+    # shellcheck disable=SC1091
+    . "$SCRIPT_DIR/lib/sonic-common.sh"
+fi
 
 check_binaries() {
     local missing=0

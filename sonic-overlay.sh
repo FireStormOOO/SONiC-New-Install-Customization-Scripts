@@ -4,7 +4,7 @@ set -euo pipefail
 
 # SONiC overlay manager: prepare /newroot against chosen lower, apply changes, activate
 
-SCRIPT_VERSION="2025.08.20-1"
+SCRIPT_VERSION="2025.08.20-2"
 
 usage() {
     cat <<USAGE
@@ -23,6 +23,13 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
 need_root() { [[ ${EUID} -eq 0 ]] || die "Must run as root"; }
+
+# source common helpers
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -f "$SCRIPT_DIR/lib/sonic-common.sh" ]]; then
+    # shellcheck disable=SC1091
+    . "$SCRIPT_DIR/lib/sonic-common.sh"
+fi
 
 resolve_lower() {
     local image_dir="$1" mode="$2"
