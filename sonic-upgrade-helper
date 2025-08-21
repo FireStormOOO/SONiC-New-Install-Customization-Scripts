@@ -5,7 +5,7 @@ set -euo pipefail
 # SONiC Upgrade Helper - Consolidated Unified Interface
 # All workflow logic integrated, fake complexity removed
 
-VERSION="0.5.0"
+VERSION="0.5.1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # shellcheck disable=SC1091
@@ -132,6 +132,7 @@ workflow_install() {
             --lower) lower="$2"; shift ;;
             --no-brew) no_brew=1 ;;
             --no-fancontrol) no_fan=1 ;;
+            --dry-run|-n) export DRY_RUN=1 ;;
             -h|--help)
                 cat <<HELP
 sonic-upgrade-helper install - Install SONiC image with optional settings restore
@@ -146,6 +147,7 @@ OPTIONS:
   --lower <mode>         Lower layer mode: auto|fs|dir (default: auto)
   --no-brew              Skip Homebrew bootstrap service
   --no-fancontrol        Skip fan control customization
+  --dry-run, -n          Show what would be done without making changes
 
 EXAMPLES:
   sonic-upgrade-helper install sonic-202411.bin
@@ -216,6 +218,7 @@ workflow_reinstall() {
             --lower) lower="$2"; shift ;;
             --no-brew) no_brew=1 ;;
             --no-fancontrol) no_fan=1 ;;
+            --dry-run|-n) export DRY_RUN=1 ;;
             -h|--help)
                 cat <<HELP
 sonic-upgrade-helper reinstall - Re-customize current image
@@ -234,6 +237,7 @@ OPTIONS:
   --lower <mode>         Lower layer mode: auto|fs|dir (default: auto)
   --no-brew              Skip Homebrew bootstrap service
   --no-fancontrol        Skip fan control customization
+  --dry-run, -n          Show what would be done without making changes
 
 EXAMPLES:
   sonic-upgrade-helper reinstall --activate
@@ -266,6 +270,7 @@ workflow_customize() {
             --lower) lower="$2"; shift ;;
             --no-brew) no_brew=1 ;;
             --no-fancontrol) no_fan=1 ;;
+            --dry-run|-n) export DRY_RUN=1 ;;
             -h|--help)
                 cat <<HELP
 sonic-upgrade-helper customize - Customize SONiC image with current system state
@@ -280,6 +285,7 @@ OPTIONS:
   --lower <mode>         Lower layer mode: auto|fs|dir (default: auto)
   --no-brew              Skip Homebrew bootstrap service
   --no-fancontrol        Skip fan control customization
+  --dry-run, -n          Show what would be done without making changes
 
 EXAMPLES:
   sonic-upgrade-helper customize --activate
